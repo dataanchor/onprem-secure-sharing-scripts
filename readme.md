@@ -1,13 +1,13 @@
-Below is a **README.md** that includes information for **both** the On-Prem Secure Sharing Service setup script (`onprem_service.sh`) **and** the MinIO setup script (`setup_minio.sh`). This guide instructs users on installing both scripts via direct download using `curl`, outlines prerequisites, and explains how to run each script step-by-step.
+Below is a **README.md** that includes information for **both** the Fenixpyre On-Prem Secure Sharing Service setup script (`onprem_service.sh`) **and** the MinIO setup script (`setup_minio.sh`). This guide instructs users on installing both scripts via direct download using `curl`, outlines prerequisites, and explains how to run each script step-by-step.
 
 ---
 
 ```markdown
-# On-Prem Secure Sharing & MinIO Setup Scripts
+# Fenixpyre On-Prem Secure Sharing & MinIO Setup Scripts
 
 A collection of Bash scripts to automate:
 1. **MinIO Setup** – Creates a secure, TLS-enabled MinIO instance.  
-2. **On-Prem Secure Sharing Setup** – Installs, configures, and verifies the On-Prem Sharing Service.
+2. **Fenixpyre On-Prem Secure Sharing Setup** – Installs, configures, and verifies the On-Prem Sharing Service.
 
 ## Overview
 
@@ -76,7 +76,7 @@ chmod +x onprem_service.sh
 
 Once complete, MinIO should be accessible at `https://<MINIO_DOMAIN>/` (e.g., `https://minio.onpremsharing.example.com/`).
 
-### 2) Setting Up On-Prem Secure Sharing
+### 2) Setting Up Fenixpyre On-Prem Secure Sharing
 
 1. **Run the Script:**
    ```bash
