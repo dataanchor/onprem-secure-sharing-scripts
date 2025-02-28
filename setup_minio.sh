@@ -14,6 +14,7 @@ echo "============================================================="
 echo "                MinIO Setup Automation Script"
 echo "This script will configure and start a MinIO instance with"
 echo "TLS enabled, using Let's Encrypt for certificates if desired."
+echo "It also configures a 1‑day lifecycle rule for object expiration."
 echo "============================================================="
 echo
 
@@ -22,7 +23,7 @@ echo
 # ------------------------------------------------------------
 echo "-------------------------------------------------------------"
 echo "Step 1: Creating Required Directories"
-echo "Description: Creating directories for MinIO certificates and data storage."
+echo "Description: Creating directories for MinIO certificates, data storage, and build files."
 echo "-------------------------------------------------------------"
 
 # Determine the directory where the script is located
@@ -34,7 +35,7 @@ MINIO_BASE_DIR="$SCRIPT_DIR/minio"
 CERTS_DIR="$MINIO_BASE_DIR/certs/minio"
 DATA_DIR="$MINIO_BASE_DIR/data"
 
-echo "Creating directories: $CERTS_DIR and $DATA_DIR"
+echo "Creating directories: $CERTS_DIR, $DATA_DIR, and build context in $MINIO_BASE_DIR"
 mkdir -p "$CERTS_DIR" || error_exit "Failed to create certificates directory."
 mkdir -p "$DATA_DIR" || error_exit "Failed to create data directory."
 echo "Directories created successfully."
@@ -137,25 +138,28 @@ echo "-------------------------------------------------------------"
 echo
 
 # ------------------------------------------------------------
-# Step 4: Creating Docker Compose File
+# Step 4: Creating Docker Compose and Build Files
 # ------------------------------------------------------------
 echo "-------------------------------------------------------------"
-echo "Step 4: Creating Docker Compose File"
-echo "Description: Generating a docker-compose.yaml to run MinIO container."
+echo "Step 4: Creating Docker Compose and Build Files"
+echo "Description: Generating a docker-compose.yaml along with Dockerfile, entrypoint, and lifecycle config."
 echo "-------------------------------------------------------------"
 
 DOCKER_COMPOSE_FILE="$MINIO_BASE_DIR/docker-compose.yaml"
+DOCKERFILE="$MINIO_BASE_DIR/Dockerfile"
+ENTRYPOINT_FILE="$MINIO_BASE_DIR/entrypoint.sh"
+LIFECYCLE_FILE="$MINIO_BASE_DIR/lifecycle.json"
+
 echo "Creating Docker Compose file at $DOCKER_COMPOSE_FILE."
 cat > "$DOCKER_COMPOSE_FILE" <<EOF
 version: '3.7'
 
 services:
   minio:
-    image: minio/minio
+    build: .
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-    command: server /data
     ports:
       - "443:9000"
     volumes:
@@ -167,7 +171,70 @@ volumes:
   minio-data:
 EOF
 
-echo "Docker Compose file created successfully."
+echo "Creating Dockerfile at $DOCKERFILE."
+cat > "$DOCKERFILE" <<'EOF'
+FROM minio/minio:latest
+
+# Install the MinIO Client (mc)
+RUN wget -qO /usr/local/bin/mc https://dl.min.io/client/mc/release/linux-amd64/mc && \
+    chmod +x /usr/local/bin/mc
+
+# Copy lifecycle configuration and entrypoint script
+COPY lifecycle.json /tmp/lifecycle.json
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+EXPOSE 9000
+
+# Use our custom entrypoint script
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+EOF
+
+echo "Creating entrypoint script at $ENTRYPOINT_FILE."
+cat > "$ENTRYPOINT_FILE" <<'EOF'
+#!/bin/sh
+
+# Start MinIO server in the background using /data as storage
+minio server /data &
+
+# Allow time for the server to initialize
+sleep 5
+
+# Set defaults or use environment variables
+MINIO_ALIAS=${MINIO_ALIAS:-"myminio"}
+MINIO_ENDPOINT=${MINIO_ENDPOINT:-"http://localhost:9000"}
+BUCKET_NAME=${BUCKET_NAME:-"mybucket"}
+
+# Configure the MinIO client alias using environment credentials
+mc alias set ${MINIO_ALIAS} ${MINIO_ENDPOINT} ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD}
+
+# Create the bucket if it doesn't already exist
+mc mb ${MINIO_ALIAS}/${BUCKET_NAME} || true
+
+# Import the lifecycle configuration to expire objects after 1 day
+mc ilm import ${MINIO_ALIAS}/${BUCKET_NAME} < /tmp/lifecycle.json
+
+# Bring the MinIO server process to the foreground
+fg %1
+EOF
+
+echo "Creating lifecycle configuration file at $LIFECYCLE_FILE."
+cat > "$LIFECYCLE_FILE" <<'EOF'
+{
+  "Rules": [
+    {
+      "ID": "ExpireAfter1Day",
+      "Prefix": "",
+      "Status": "Enabled",
+      "Expiration": {
+        "Days": 1
+      }
+    }
+  ]
+}
+EOF
+
+echo "Docker Compose and build files created successfully."
 echo "-------------------------------------------------------------"
 echo
 
@@ -215,5 +282,5 @@ fi
 # ------------------------------------------------------------
 echo "============================================================="
 echo "                 MinIO Setup Completed"
-echo "Your MinIO instance is now up and running."
+echo "Your MinIO instance is now up and running with a 1-day lifecycle rule."
 echo "============================================================="
