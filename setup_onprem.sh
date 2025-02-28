@@ -7,6 +7,11 @@ error_exit() {
   exit 1
 }
 
+# Check if script is run with sudo
+if [ "$EUID" -ne 0 ]; then
+  error_exit "This script must be run with sudo privileges. Please run with: sudo $0"
+fi
+
 # ------------------------------------------------------------
 # Setup Function: Full Installation and Configuration
 # ------------------------------------------------------------
@@ -21,6 +26,10 @@ echo "      Fenixpyre On-Prem Sharing Service Setup Automation"
 echo "This script will configure and start the On-Prem Sharing Service"
 echo "with PostgreSQL and TLS enabled for the public API."
 echo "============================================================="
+echo
+
+echo "Verifying system requirements..."
+echo "✓ Running with sudo privileges"
 echo
 
 # ------------------------------------------------------------
@@ -124,16 +133,20 @@ echo
 # Step 5: Collecting Remaining Configuration Details
 # ------------------------------------------------------------
 echo "-------------------------------------------------------------"
-echo "Step 5: Collecting Remaining Configuration Details"
-echo "Description: Prompting for database credentials, MinIO details, and security tokens."
+echo "Step 5: Collecting Configuration Details"
+echo "Description: Prompting for MinIO details and security tokens."
 echo "-------------------------------------------------------------"
 
-read -p "Enter PostgreSQL host [default: postgres]: " DB_HOST
-DB_HOST=${DB_HOST:-postgres}
-read -p "Enter PostgreSQL username: " DB_USER
-read -sp "Enter PostgreSQL password: " DB_PASS
+# Using fixed PostgreSQL credentials
+DB_HOST="postgres"
+DB_USER="admin-user"
+DB_PASS="admin-pass"
+DB_NAME="secure-db"
+
+echo "Using default PostgreSQL configuration:"
+echo "  Host: $DB_HOST"
+echo "  Database: $DB_NAME"
 echo
-read -p "Enter PostgreSQL database name: " DB_NAME
 
 read -p "Enter MinIO endpoint (e.g., minio.onpremsharing.example.com): " MINIO_ENDPOINT
 read -p "Enter MinIO Access Key ID: " MINIO_ID
@@ -295,7 +308,15 @@ CLIENT_CERT="$MTLS_CERTS_DIR/server.crt"
 CLIENT_KEY="$MTLS_CERTS_DIR/server.key"
 
 PRIVATE_API_URL="https://${PUBLIC_IP}:8080/health"
-PRIVATE_API_STATUS=$(curl -k --cert "$CLIENT_CERT" --key "$CLIENT_KEY" -o /dev/null -w "%{http_code}" "$PRIVATE_API_URL" || echo "Failed")
+PRIVATE_API_STATUS=$(curl -k \
+  --cert "$CLIENT_CERT" \
+  --key "$CLIENT_KEY" \
+  -H "d-user-id: test@example.com" \
+  -H "d-agent-id: test-agent-001" \
+  -H "d-org-id: test-org-001" \
+  -o /dev/null \
+  -w "%{http_code}" \
+  "$PRIVATE_API_URL" || echo "Failed")
 echo "HTTP Status Code from private API health check: $PRIVATE_API_STATUS"
 
 if [ "$PRIVATE_API_STATUS" -eq 200 ]; then
@@ -394,14 +415,22 @@ verify_onprem() {
   CLIENT_KEY="./onpremsharing/certs/mtls/server.key"
 
   PRIVATE_API_URL="https://${PUBLIC_IP}:8080/health"
-  PRIVATE_HTTP_STATUS=$(curl -k --cert "$CLIENT_CERT" --key "$CLIENT_KEY" -o /dev/null -w "%{http_code}" "$PRIVATE_API_URL" || echo "Failed")
+  PRIVATE_API_STATUS=$(curl -k \
+    --cert "$CLIENT_CERT" \
+    --key "$CLIENT_KEY" \
+    -H "d-user-id: test@example.com" \
+    -H "d-agent-id: test-agent-001" \
+    -H "d-org-id: test-org-001" \
+    -o /dev/null \
+    -w "%{http_code}" \
+    "$PRIVATE_API_URL" || echo "Failed")
 
-  echo "HTTP Status Code from private API health check: $PRIVATE_HTTP_STATUS"
+  echo "HTTP Status Code from private API health check: $PRIVATE_API_STATUS"
 
-  if [ "$PRIVATE_HTTP_STATUS" -eq 200 ]; then
+  if [ "$PRIVATE_API_STATUS" -eq 200 ]; then
     echo "Private API is healthy and accessible at ${PRIVATE_API_URL}."
   else
-    echo "Private API health check failed with status code $PRIVATE_HTTP_STATUS."
+    echo "Private API health check failed with status code $PRIVATE_API_STATUS."
     exit 1
   fi
   echo "-------------------------------------------------------------"
