@@ -1,137 +1,262 @@
-Below is a **README.md** file tailored for the [onprem-secure-sharing-scripts](https://github.com/dataanchor/onprem-secure-sharing-scripts) repository. It explains how to **directly download** the two scripts—**`setup_minio.sh`** and **`setup_onprem.sh`**—using `curl`, outlines prerequisites, and provides usage details for each script.
+#!/bin/bash
+set -e
 
----
+# Check if script is run as root/sudo
+if [ "$EUID" -ne 0 ]; then
+    echo "Please run this script with sudo"
+    exit 1
+fi
 
-```markdown
-# Fenixpyre On-Prem Secure Sharing Scripts
+# Function to display error messages and exit
+error_exit() {
+  echo "Error: $1" >&2
+  exit 1
+}
 
-This repository contains two Bash scripts to automate the setup of **MinIO** and the **On-Prem Secure Sharing Service**:
+# Main menu
+show_menu() {
+  echo "============================================================="
+  echo "                MinIO Distributed Setup"
+  echo "============================================================="
+  echo "1) Setup MinIO"
+  echo "2) Exit"
+  echo "============================================================="
+  read -p "Enter your choice (1-2): " CHOICE
+  
+  case "$CHOICE" in
+    1)
+      setup_minio
+      ;;
+    2)
+      echo "Exiting..."
+      exit 0
+      ;;
+    *)
+      error_exit "Invalid choice"
+      ;;
+  esac
+}
 
-1. **`setup_minio.sh`**  
-   - Provisions a TLS-enabled MinIO instance via Docker Compose.    
-   - Optionally obtains TLS certificates from Let's Encrypt or allows manual placement.
+# Function to setup MinIO
+setup_minio() {
+  # ------------------------------------------------------------
+  # Header
+  # ------------------------------------------------------------
+  echo "============================================================="
+  echo "                MinIO Setup Automation Script"
+  echo "This script will configure and start a MinIO instance with"
+  echo "TLS enabled, using Let's Encrypt for certificates if desired."
+  echo "============================================================="
+  echo
 
-2. **`setup_onprem.sh`**  
-   - Sets up the Fenixpyre On-Prem Secure Sharing Service (including mTLS certificates, optional public TLS, Docker Compose deployment).  
-   - Performs initial health checks on both the public (TLS) and private (mTLS) APIs.
+  # ------------------------------------------------------------
+  # Step 1: Environment Setup - Creating Required Directories
+  # ------------------------------------------------------------
+  echo "-------------------------------------------------------------"
+  echo "Step 1: Creating Required Directories"
+  echo "Description: Creating directories for MinIO certificates and data storage."
+  echo "-------------------------------------------------------------"
 
----
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  echo "Script is running from: $SCRIPT_DIR"
 
-## Prerequisites
+  MINIO_BASE_DIR="$SCRIPT_DIR/minio"
+  CERTS_DIR="$MINIO_BASE_DIR/certs/minio"
+  DATA_DIR="$MINIO_BASE_DIR/data"
 
-- **Linux environment** with Bash.
-- **Docker** and **Docker Compose** installed.
-- **curl** for downloading the scripts.
-- **Certbot** (if you plan to automatically generate TLS certificates via Let’s Encrypt).
+  echo "Creating directories for MinIO setup..."
+  mkdir -p "$CERTS_DIR" || error_exit "Failed to create certificates directory."
+  mkdir -p "$DATA_DIR" || error_exit "Failed to create data directory."
+  echo "Directories created successfully."
+  echo "-------------------------------------------------------------"
+  echo
 
-> **Firewall:**  
-> Ensure the server’s ports 80/443 are open for certificate validation (if using Let's Encrypt). If you’re using internal CA-signed certs, you can place them manually.
+  # ------------------------------------------------------------
+  # Step 2: Collecting Domain and Credentials
+  # ------------------------------------------------------------
+  echo "-------------------------------------------------------------"
+  echo "Step 2: Collecting Domain, Credentials, and Bucket Name"
+  echo "Description: Prompting for MinIO domain, root user, password, and bucket."
+  echo "-------------------------------------------------------------"
 
----
+  read -p "Enter the domain for MinIO (default: minio.onpremsharing.example.com): " MINIO_DOMAIN
+  MINIO_DOMAIN=${MINIO_DOMAIN:-minio.onpremsharing.example.com}
 
-## Installation
+  while true; do
+    read -p "Enter MinIO root user [default: minioadmin]: " MINIO_ROOT_USER
+    MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+    if [ ${#MINIO_ROOT_USER} -ge 3 ]; then
+      break
+    else
+      echo "MINIO_ROOT_USER length should be at least 3 characters."
+    fi
+  done
 
-You can **directly download** each script using `curl`:
+  while true; do
+    read -sp "Enter MinIO root password (min 8 characters): " MINIO_ROOT_PASSWORD
+    echo
+    if [ ${#MINIO_ROOT_PASSWORD} -lt 8 ]; then
+      echo "Password must be at least 8 characters. Please try again."
+      continue
+    fi
+    read -sp "Confirm MinIO root password: " MINIO_ROOT_PASSWORD_CONFIRM
+    echo
+    if [[ "$MINIO_ROOT_PASSWORD" == "$MINIO_ROOT_PASSWORD_CONFIRM" ]]; then
+      break
+    else
+      echo "Passwords do not match. Please try again."
+    fi
+  done
 
-### 1. Download `setup_minio.sh`
+  read -p "Enter bucket name [default: data]: " BUCKET_NAME
+  BUCKET_NAME=${BUCKET_NAME:-data}
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/dataanchor/onprem-secure-sharing-scripts/main/setup_minio.sh -o setup_minio.sh
-chmod +x setup_minio.sh
-```
+  echo "Domain, credentials, and bucket name collected."
+  echo "-------------------------------------------------------------"
+  echo
 
-### 2. Download `setup_onprem.sh`
+  # ------------------------------------------------------------
+  # Step 3: TLS Certificate Retrieval
+  # ------------------------------------------------------------
+  echo "-------------------------------------------------------------"
+  echo "Step 3: TLS Certificate Retrieval"
+  echo "Description: Obtaining or using existing TLS certificates via Let's Encrypt."
+  echo "-------------------------------------------------------------"
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/dataanchor/onprem-secure-sharing-scripts/main/setup_onprem.sh -o setup_onprem.sh
-chmod +x setup_onprem.sh
-```
+  read -p "Do you want to create a TLS certificate for ${MINIO_DOMAIN} using Let's Encrypt? (y/N): " CREATE_CERT
 
----
+  if [[ "$CREATE_CERT" =~ ^[Yy]$ ]]; then
+    CERT_PATH="/etc/letsencrypt/live/${MINIO_DOMAIN}"
+    if sudo test -d "$CERT_PATH"; then
+      echo "Certificate for ${MINIO_DOMAIN} already exists. Using existing certificate."
+      sudo cp "${CERT_PATH}/privkey.pem" "$CERTS_DIR/private.key" || error_exit "Failed to copy private key."
+      sudo cp "${CERT_PATH}/fullchain.pem" "$CERTS_DIR/public.crt" || error_exit "Failed to copy public certificate."
+    else
+      if ! command -v certbot >/dev/null; then
+        echo "Certbot not found. Installing certbot."
+        sudo apt-get update && sudo apt-get install -y certbot || error_exit "Failed to install Certbot."
+      fi
+      echo "Obtaining certificate for ${MINIO_DOMAIN} using standalone mode."
+      sudo certbot certonly --non-interactive --agree-tos --standalone -d "${MINIO_DOMAIN}" --register-unsafely-without-email || error_exit "Certbot failed to obtain certificate."
+      if sudo test -f "${CERT_PATH}/privkey.pem" && sudo test -f "${CERT_PATH}/fullchain.pem"; then
+        sudo cp "${CERT_PATH}/privkey.pem" "$CERTS_DIR/private.key" || error_exit "Failed to copy private key."
+        sudo cp "${CERT_PATH}/fullchain.pem" "$CERTS_DIR/public.crt" || error_exit "Failed to copy public certificate."
+        echo "Certificate obtained and placed in $CERTS_DIR."
+      else
+        error_exit "Failed to obtain certificate for ${MINIO_DOMAIN}. Exiting."
+      fi
+    fi
+  else
+    echo "Please place your MinIO TLS certificates (private.key and public.crt) into $CERTS_DIR."
+    read -p "Press [Enter] after placing the certificates..."
+    if [ ! -f "$CERTS_DIR/private.key" ] || [ ! -f "$CERTS_DIR/public.crt" ]; then
+      error_exit "Certificates not found in $CERTS_DIR. Exiting."
+    fi
+  fi
 
-## Usage
+  echo "TLS certificate setup complete."
+  echo "-------------------------------------------------------------"
+  echo
 
-### Setting Up MinIO
+  # ------------------------------------------------------------
+  # Step 4: Creating Docker Compose File
+  # ------------------------------------------------------------
+  echo "-------------------------------------------------------------"
+  echo "Step 4: Creating Docker Compose File"
+  echo "Description: Generating docker-compose.yaml for MinIO service."
+  echo "-------------------------------------------------------------"
 
-1. **Run the Script:**
+  DOCKER_COMPOSE_FILE="$MINIO_BASE_DIR/docker-compose.yaml"
 
-   ```bash
-   ./setup_minio.sh
-   ```
-   
-2. **Follow Prompts:**
-   - **Domain Name**: e.g., `minio.example.com`.
-   - **MinIO Root User** and **Password**.
-   - **TLS Certificate**: Choose between auto-generation with Let’s Encrypt or manual placement.
-   
-3. **Docker Compose Deployment:**
-   - The script creates a `docker-compose.yaml` in `~/minio/`.
-   - **MinIO** starts on **port 443** (internally mapped from container port `9000`).
+  cat > "$DOCKER_COMPOSE_FILE" <<EOF
+version: '3.7'
 
-4. **Health Check**:
-   - The script verifies the endpoint at `https://<MINIO_DOMAIN>/minio/health/ready` to ensure MinIO is up and running.
+services:
+  minio:
+    container_name: minio
+    image: minio/minio:latest
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "443:9000"
+      - "9001:9001"
+    volumes:
+      - ./data:/data
+      - ./certs/minio:/root/.minio/certs
+    restart: unless-stopped
+EOF
 
-> **Result**: MinIO is available at `https://<MINIO_DOMAIN>` with TLS.
+  echo "Docker Compose file created successfully."
+  echo "-------------------------------------------------------------"
+  echo
 
----
+  # ------------------------------------------------------------
+  # Step 5: Starting MinIO Container
+  # ------------------------------------------------------------
+  echo "-------------------------------------------------------------"
+  echo "Step 5: Starting MinIO Container"
+  echo "Description: Using Docker Compose to launch the MinIO service."
+  echo "-------------------------------------------------------------"
 
-### Setting Up the On-Prem Secure Sharing Service
+  cd "$MINIO_BASE_DIR" || error_exit "Failed to change directory to $MINIO_BASE_DIR."
+  docker compose up -d || error_exit "Failed to start MinIO container."
 
-1. **Run the Script:**
+  echo "Waiting for MinIO to initialize..."
+  sleep 10
 
-   ```bash
-   ./setup_onprem.sh
-   ```
+  echo "MinIO container started."
+  echo "-------------------------------------------------------------"
+  echo
 
-2. **Place mTLS Certificates**:  
-   - The script prompts you to put your mTLS (private API) certificates (`server.crt`, `server.key`, `ca.crt`) in `~/onpremsharing/certs/mtls/`.
+  # ------------------------------------------------------------
+  # Step 6: Health Check
+  # ------------------------------------------------------------
+  echo "-------------------------------------------------------------"
+  echo "Step 6: Health Check"
+  echo "Description: Verifying that MinIO is running and healthy."
+  echo "-------------------------------------------------------------"
 
-3. **Obtain or Place TLS Certificate** (for the public API):
-   - Similar to the MinIO script, you can opt for a Let’s Encrypt certificate or place your own in `~/onpremsharing/certs/ssl/`.
+  HEALTH_URL="https://${MINIO_DOMAIN}/minio/health/ready"
+  HTTP_STATUS=$(curl -ks -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo "Failed to connect")
+  echo "HTTP Status Code from health check: $HTTP_STATUS"
 
-4. **Configuration Details**:
-   - The script collects **PostgreSQL** and **MinIO** credentials, tokens/secrets, etc.
-   - Generates `config.yaml` and a Docker Compose file in `~/onpremsharing/`.
+  if [ "$HTTP_STATUS" -eq 200 ]; then
+    echo "MinIO is healthy and running at https://${MINIO_DOMAIN}"
+  else
+    echo "MinIO health check failed with status code $HTTP_STATUS."
+    echo "Please verify your setup."
+    exit 1
+  fi
 
-5. **Docker Compose Deployment**:
-   - Launches containers (PostgreSQL + On-Prem Secure Sharing) with `docker-compose up -d`.
-   - **Public API** on port **443**, **private API** on port **8080** (mTLS).
+  # ------------------------------------------------------------
+  # Footer
+  # ------------------------------------------------------------
+  echo "============================================================="
+  echo "                 MinIO Setup Completed"
+  echo "Your MinIO instance is now up and running."
+  echo "============================================================="
 
-6. **Health Checks**:
-   - **Public** (TLS) endpoint: `https://<ONPREM_DOMAIN>/health`  
-   - **Private** (mTLS) endpoint: tested on `https://<VM_PUBLIC_IP>:8080/health` using the server’s own certificates.
+  # Add lifecycle rule after MinIO is running
+  echo "Setting up lifecycle rule for domain ${MINIO_DOMAIN} with root user ${MINIO_ROOT_USER}..."
+  docker exec minio mc alias set local https://${MINIO_DOMAIN} "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" --insecure
+  
+  # Create the specified bucket if it doesn't exist
+  echo "Creating bucket '${BUCKET_NAME}'..."
+  if ! docker exec minio mc ls local/${BUCKET_NAME} --insecure &>/dev/null; then
+    docker exec minio mc mb local/${BUCKET_NAME} --insecure || error_exit "Failed to create bucket ${BUCKET_NAME}"
+    echo "Bucket '${BUCKET_NAME}' created successfully."
+  else
+    echo "Bucket '${BUCKET_NAME}' already exists."
+  fi
+  
+  # Add lifecycle rule to the bucket with /downloads prefix
+  echo "Adding lifecycle rule to bucket for /downloads prefix..."
+  docker exec minio mc ilm add local/${BUCKET_NAME} --expire-days 1 --prefix "downloads/" --insecure
 
----
+  echo "MinIO setup completed with lifecycle rule configured for '${BUCKET_NAME}/downloads' prefix."
+}
 
-## Scripts Overview
-
-### `setup_minio.sh`
-- **Creates directories**: `~/minio/certs/minio/`, etc.
-- **Prompts for**: domain, MinIO credentials, TLS certificate approach.
-- **Generates** `docker-compose.yaml` under `~/minio/`.
-- **Starts** MinIO container with TLS on port 443.
-- **Verifies** readiness (`curl -k https://<MINIO_DOMAIN>/minio/health/ready`).
-
-### `setup_onprem.sh`
-- **Prompts for**: domain, mTLS certs, optional public TLS cert, Postgres + MinIO info, tokens.
-- **Writes** `config.yaml` and `docker-compose.yaml` under `~/onpremsharing/`.
-- **Starts** containers (`postgres`, `onprem`) using Docker Compose.
-- **Checks** public API (`/health`) and private API (mTLS on port 8080).
-
----
-
-## Known Issues and Troubleshooting
-
-1. **Port Conflicts**:  
-   If ports 80/443 are blocked by another service, Let’s Encrypt certificate generation may fail.
-   
-2. **DNS Resolution**:  
-   Ensure your domain’s DNS correctly points to the VM’s public IP.
-
-3. **Permission Errors**:  
-   Use `sudo` if lacking permissions for writing to `/etc/letsencrypt` or installing packages.
-
-4. **Docker Compose Not Found**:  
-   Make sure you have installed Docker Compose on both VMs (for MinIO and On-Prem Service).
-
----
+# Start the script
+show_menu
