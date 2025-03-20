@@ -253,7 +253,7 @@ EOF
   
   # Add lifecycle rule to the bucket with /downloads prefix
   echo "Adding lifecycle rule to bucket for /downloads prefix..."
-  docker exec minio mc ilm add local/${BUCKET_NAME} --expire-days 1 --prefix "downloads/" --insecure
+  docker exec minio mc ilm add local/${BUCKET_NAME} --expire-days 1 --prefix "/downloads" --insecure
 
   echo "MinIO setup completed with lifecycle rule configured for '${BUCKET_NAME}/downloads' prefix."
 }
