@@ -1,16 +1,73 @@
 #!/bin/bash
 set -e
 
-# Check if script is run as root/sudo
-if [ "$EUID" -ne 0 ]; then
-    echo "Please run this script with sudo"
-    exit 1
-fi
-
 # Function to display error messages and exit
 error_exit() {
   echo "Error: $1" >&2
   exit 1
+}
+
+# Check if script is run as root/sudo
+if [ "$EUID" -ne 0 ]; then
+  echo "Please run this script with sudo"
+  exit 1
+fi
+
+# Configure Certificate Renewal Function
+# This is a reusable function for both full setup and standalone renewal
+configure_cert_renewal() {
+  local domain=$1
+  local cert_path=$2
+  local certs_dir=$3
+  local base_dir=$4
+  
+  echo "Configuring certificate renewal..."
+  
+  # Create the deploy hook script in the service directory
+  SCRIPTS_DIR="$base_dir/scripts"
+  mkdir -p "$SCRIPTS_DIR"
+  DEPLOY_HOOK_SCRIPT="$SCRIPTS_DIR/cert-deploy-hook.sh"
+  
+  # Create the deploy hook script
+  sudo tee "$DEPLOY_HOOK_SCRIPT" > /dev/null << EOF
+#!/bin/bash
+# Let's Encrypt certificate renewal deploy hook for MinIO Service
+
+# Check if this renewal is for our domain
+if [[ "\$RENEWED_DOMAINS" == *"${domain}"* ]]; then
+  # Copy the renewed certificates to the service location
+  cp "\$RENEWED_LINEAGE/privkey.pem" "$certs_dir/private.key"
+  cp "\$RENEWED_LINEAGE/fullchain.pem" "$certs_dir/public.crt"
+  
+  # Restart the container to apply new certificates
+  cd "$base_dir" && docker compose restart minio
+  
+  # Log the renewal
+  echo "\$(date): Renewed certificates for ${domain} and restarted MinIO service" >> "$base_dir/certificate-renewal.log"
+fi
+EOF
+  
+  # Make the deploy hook executable
+  sudo chmod +x "$DEPLOY_HOOK_SCRIPT"
+  
+  # Set up a daily cron job to attempt renewal with deploy hook
+  CRON_JOB="0 3 * * * /usr/bin/certbot renew --cert-name ${domain} --deploy-hook $DEPLOY_HOOK_SCRIPT --quiet"
+  
+  # Check if the cron job already exists before adding it
+  if sudo crontab -l 2>/dev/null | grep -q "${domain}"; then
+    # Remove old cron job
+    sudo crontab -l 2>/dev/null | grep -v "${domain}" | sudo crontab -
+    echo "Replaced existing cron job for ${domain}"
+  fi
+  
+  # Add the new cron job
+  (sudo crontab -l 2>/dev/null; echo "$CRON_JOB") | sudo crontab -
+  echo "Added daily renewal cron job for ${domain} running at 3:00 AM."
+  
+  echo "Certificate renewal has been configured:"
+  echo "- Deploy hook: $DEPLOY_HOOK_SCRIPT"
+  echo "- Daily renewal check at 3:00 AM with deploy hook directly specified"
+  echo "- Log file: $base_dir/certificate-renewal.log"
 }
 
 # Main menu
@@ -19,15 +76,19 @@ show_menu() {
   echo "                MinIO Distributed Setup"
   echo "============================================================="
   echo "1) Setup MinIO"
-  echo "2) Exit"
+  echo "2) Setup Certificate Renewal"
+  echo "3) Exit"
   echo "============================================================="
-  read -p "Enter your choice (1-2): " CHOICE
+  read -p "Enter your choice (1-3): " CHOICE
   
   case "$CHOICE" in
     1)
       setup_minio
       ;;
     2)
+      setup_cert_renewal
+      ;;
+    3)
       echo "Exiting..."
       exit 0
       ;;
@@ -56,7 +117,7 @@ setup_minio() {
   echo "Step 1: Creating Required Directories"
   echo "Description: Creating directories for MinIO certificates and data storage."
   echo "-------------------------------------------------------------"
-
+  
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   echo "Script is running from: $SCRIPT_DIR"
 
@@ -142,6 +203,10 @@ setup_minio() {
         sudo cp "${CERT_PATH}/privkey.pem" "$CERTS_DIR/private.key" || error_exit "Failed to copy private key."
         sudo cp "${CERT_PATH}/fullchain.pem" "$CERTS_DIR/public.crt" || error_exit "Failed to copy public certificate."
         echo "Certificate obtained and placed in $CERTS_DIR."
+        
+        # Configure certificate renewal using the shared function
+        configure_cert_renewal "$MINIO_DOMAIN" "$CERT_PATH" "$CERTS_DIR" "$MINIO_BASE_DIR"
+        
       else
         error_exit "Failed to obtain certificate for ${MINIO_DOMAIN}. Exiting."
       fi
@@ -205,7 +270,6 @@ EOF
 
   echo "Waiting for MinIO to initialize..."
   sleep 10
-
   echo "MinIO container started."
   echo "-------------------------------------------------------------"
   echo
@@ -256,6 +320,91 @@ EOF
   docker exec minio mc ilm add local/${BUCKET_NAME} --expire-days 1 --prefix "/downloads" --insecure
 
   echo "MinIO setup completed with lifecycle rule configured for '${BUCKET_NAME}/downloads' prefix."
+}
+
+# Setup certificate renewal function
+setup_cert_renewal() {
+  echo "============================================================="
+  echo "         MinIO Certificate Renewal Automation Setup"
+  echo "This option will configure automatic certificate renewal"
+  echo "for your existing Let's Encrypt certificates."
+  echo "============================================================="
+  echo
+
+  # Ask directly for domain name
+  read -p "Enter the domain for MinIO Service: " MINIO_DOMAIN
+  
+  # Final check for domain
+  if [ -z "$MINIO_DOMAIN" ]; then
+    error_exit "Domain cannot be empty"
+  fi
+  
+  # Check if certificate exists
+  CERT_PATH="/etc/letsencrypt/live/${MINIO_DOMAIN}"
+  if [ ! -d "$CERT_PATH" ]; then
+    echo "Certificate for ${MINIO_DOMAIN} not found at $CERT_PATH"
+    read -p "Would you like to create a new certificate for ${MINIO_DOMAIN}? (Y/n): " CREATE_CERT
+    
+    if [[ ! "$CREATE_CERT" =~ ^[Nn]$ ]]; then
+      # Check if certbot is installed
+      if ! command -v certbot >/dev/null; then
+        echo "Certbot not found. Installing certbot..."
+        sudo apt-get update && sudo apt-get install -y certbot || error_exit "Failed to install Certbot."
+      fi
+      
+      # Get MinIO certificate path
+      SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+      MINIO_BASE_DIR="$SCRIPT_DIR/minio"
+      CERTS_DIR="$MINIO_BASE_DIR/certs/minio"
+      
+      if [ ! -d "$CERTS_DIR" ]; then
+        echo "Creating MinIO certificates directory..."
+        mkdir -p "$CERTS_DIR" || error_exit "Failed to create MinIO certificates directory."
+      fi
+      
+      # Obtain certificate
+      echo "Obtaining certificate for ${MINIO_DOMAIN} using standalone mode."
+      sudo certbot certonly --non-interactive --agree-tos --standalone -d "${MINIO_DOMAIN}" --register-unsafely-without-email || error_exit "Certbot failed to obtain certificate."
+      
+      if sudo test -f "${CERT_PATH}/privkey.pem" && sudo test -f "${CERT_PATH}/fullchain.pem"; then
+        echo "Certificate obtained successfully."
+      else
+        error_exit "Failed to obtain certificate for ${MINIO_DOMAIN}. Exiting."
+      fi
+    else
+      error_exit "Cannot proceed without a valid certificate."
+    fi
+  else
+    echo "Certificate found for ${MINIO_DOMAIN}"
+  fi
+  
+  # Get MinIO certificate path
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  MINIO_BASE_DIR="$SCRIPT_DIR/minio"
+  CERTS_DIR="$MINIO_BASE_DIR/certs/minio"
+  
+  if [ ! -d "$CERTS_DIR" ]; then
+    echo "Creating MinIO certificates directory..."
+    mkdir -p "$CERTS_DIR" || error_exit "Failed to create MinIO certificates directory."
+  fi
+  
+  # Copy current certificates to MinIO service location
+  echo "Copying current certificates to MinIO service location..."
+  sudo cp "${CERT_PATH}/privkey.pem" "$CERTS_DIR/private.key" || error_exit "Failed to copy private key."
+  sudo cp "${CERT_PATH}/fullchain.pem" "$CERTS_DIR/public.crt" || error_exit "Failed to copy public certificate."
+  
+  # Configure certificate renewal using the shared function
+  configure_cert_renewal "$MINIO_DOMAIN" "$CERT_PATH" "$CERTS_DIR" "$MINIO_BASE_DIR"
+  
+  # Run validation script if available
+  if [ -f "$SCRIPT_DIR/validate_minio_renewal.sh" ]; then
+    echo "Validation script found. You can verify your setup with:"
+    echo "sudo $SCRIPT_DIR/validate_minio_renewal.sh"
+  fi
+  
+  echo "============================================================="
+  echo "Certificate renewal automation setup completed successfully."
+  echo "============================================================="
 }
 
 # Start the script

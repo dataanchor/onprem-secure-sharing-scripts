@@ -13,6 +13,65 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # ------------------------------------------------------------
+# Configure Certificate Renewal Function
+# This is a reusable function for both full setup and standalone renewal
+# ------------------------------------------------------------
+configure_cert_renewal() {
+  local domain=$1
+  local cert_path=$2
+  local ssl_certs_dir=$3
+  local base_dir=$4
+  
+  echo "Configuring certificate renewal..."
+  
+  # Create the deploy hook script in the service directory
+  SCRIPTS_DIR="$base_dir/scripts"
+  mkdir -p "$SCRIPTS_DIR"
+  DEPLOY_HOOK_SCRIPT="$SCRIPTS_DIR/cert-deploy-hook.sh"
+  
+  # Create the deploy hook script
+  sudo tee "$DEPLOY_HOOK_SCRIPT" > /dev/null << EOF
+#!/bin/bash
+# Let's Encrypt certificate renewal deploy hook for OnPrem Service
+
+# Check if this renewal is for our domain
+if [[ "\$RENEWED_DOMAINS" == *"${domain}"* ]]; then
+  # Copy the renewed certificates to the service location
+  cp "\$RENEWED_LINEAGE/privkey.pem" "$ssl_certs_dir/server.key"
+  cp "\$RENEWED_LINEAGE/fullchain.pem" "$ssl_certs_dir/server.crt"
+  
+  # Restart the container to apply new certificates
+  cd "$base_dir" && docker compose restart onprem
+  
+  # Log the renewal
+  echo "\$(date): Renewed certificates for ${domain} and restarted OnPrem service" >> "$base_dir/certificate-renewal.log"
+fi
+EOF
+  
+  # Make the deploy hook executable
+  sudo chmod +x "$DEPLOY_HOOK_SCRIPT"
+  
+  # Set up a daily cron job to attempt renewal with deploy hook
+  CRON_JOB="0 3 * * * /usr/bin/certbot renew --cert-name ${domain} --deploy-hook $DEPLOY_HOOK_SCRIPT --quiet"
+  
+  # Check if the cron job already exists before adding it
+  if sudo crontab -l 2>/dev/null | grep -q "${domain}"; then
+    # Remove old cron job
+    sudo crontab -l 2>/dev/null | grep -v "${domain}" | sudo crontab -
+    echo "Replaced existing cron job for ${domain}"
+  fi
+  
+  # Add the new cron job
+  (sudo crontab -l 2>/dev/null; echo "$CRON_JOB") | sudo crontab -
+  echo "Added daily renewal cron job for ${domain} running at 3:00 AM."
+  
+  echo "Certificate renewal has been configured:"
+  echo "- Deploy hook: $DEPLOY_HOOK_SCRIPT"
+  echo "- Daily renewal check at 3:00 AM with deploy hook directly specified"
+  echo "- Log file: $base_dir/certificate-renewal.log"
+}
+
+# ------------------------------------------------------------
 # Setup Function: Full Installation and Configuration
 # ------------------------------------------------------------
 setup_onprem() {
@@ -114,6 +173,10 @@ if [[ "$CREATE_CERT" =~ ^[Yy]$ ]]; then
       sudo cp "${CERT_PATH}/privkey.pem" "$SSL_CERTS_DIR/server.key" || error_exit "Failed to copy private key."
       sudo cp "${CERT_PATH}/fullchain.pem" "$SSL_CERTS_DIR/server.crt" || error_exit "Failed to copy public certificate."
       echo "Certificate obtained and placed in $SSL_CERTS_DIR."
+      
+      # Configure certificate renewal using the shared function
+      configure_cert_renewal "$ONPREM_DOMAIN" "$CERT_PATH" "$SSL_CERTS_DIR" "$ONPREM_BASE_DIR"
+      
     else
       error_exit "Failed to obtain certificate for ${ONPREM_DOMAIN}. Exiting."
     fi
@@ -265,8 +328,8 @@ echo "-------------------------------------------------------------"
 cd "$ONPREM_BASE_DIR" || error_exit "Failed to change directory to $ONPREM_BASE_DIR."
 docker compose up -d || error_exit "Failed to start On-Prem Sharing Service containers."
 
-echo "Waiting for services to initialize..."
-sleep 15
+echo "Waiting 30 seconds for services to initialize..."
+sleep 30
 echo "Services started."
 echo "-------------------------------------------------------------"
 echo
@@ -506,6 +569,93 @@ EOF
 }
 
 # ------------------------------------------------------------
+# Setup Certificate Renewal Function
+# ------------------------------------------------------------
+setup_cert_renewal() {
+  echo "============================================================="
+  echo "         OnPrem Certificate Renewal Automation Setup"
+  echo "This option will configure automatic certificate renewal"
+  echo "for your existing Let's Encrypt certificates."
+  echo "============================================================="
+  echo
+
+  # Ask directly for domain name
+  read -p "Enter the domain for OnPrem Service: " ONPREM_DOMAIN
+  
+  # Final check for domain
+  if [ -z "$ONPREM_DOMAIN" ]; then
+    error_exit "Domain cannot be empty"
+  fi
+  
+  # Check if certificate exists
+  CERT_PATH="/etc/letsencrypt/live/${ONPREM_DOMAIN}"
+  if [ ! -d "$CERT_PATH" ]; then
+    echo "Certificate for ${ONPREM_DOMAIN} not found at $CERT_PATH"
+    read -p "Would you like to create a new certificate for ${ONPREM_DOMAIN}? (Y/n): " CREATE_CERT
+    
+    if [[ ! "$CREATE_CERT" =~ ^[Nn]$ ]]; then
+      # Check if certbot is installed
+      if ! command -v certbot >/dev/null; then
+        echo "Certbot not found. Installing certbot..."
+        sudo apt-get update && sudo apt-get install -y certbot || error_exit "Failed to install Certbot."
+      fi
+      
+      # Get SSL certificate path
+      SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+      ONPREM_BASE_DIR="$SCRIPT_DIR/onpremsharing"
+      SSL_CERTS_DIR="$ONPREM_BASE_DIR/certs/ssl"
+      
+      if [ ! -d "$SSL_CERTS_DIR" ]; then
+        echo "Creating SSL certificates directory..."
+        mkdir -p "$SSL_CERTS_DIR" || error_exit "Failed to create SSL certificates directory."
+      fi
+      
+      # Obtain certificate
+      echo "Obtaining certificate for ${ONPREM_DOMAIN} using standalone mode."
+      sudo certbot certonly --non-interactive --agree-tos --standalone -d "${ONPREM_DOMAIN}" --register-unsafely-without-email || error_exit "Certbot failed to obtain certificate."
+      
+      if sudo test -f "${CERT_PATH}/privkey.pem" && sudo test -f "${CERT_PATH}/fullchain.pem"; then
+        echo "Certificate obtained successfully."
+      else
+        error_exit "Failed to obtain certificate for ${ONPREM_DOMAIN}. Exiting."
+      fi
+    else
+      error_exit "Cannot proceed without a valid certificate."
+    fi
+  else
+    echo "Certificate found for ${ONPREM_DOMAIN}"
+  fi
+  
+  # Get SSL certificate path in OnPrem service
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  ONPREM_BASE_DIR="$SCRIPT_DIR/onpremsharing"
+  SSL_CERTS_DIR="$ONPREM_BASE_DIR/certs/ssl"
+  
+  if [ ! -d "$SSL_CERTS_DIR" ]; then
+    echo "Creating SSL certificates directory..."
+    mkdir -p "$SSL_CERTS_DIR" || error_exit "Failed to create SSL certificates directory."
+  fi
+  
+  # Copy current certificates to OnPrem service location
+  echo "Copying current certificates to OnPrem service location..."
+  sudo cp "${CERT_PATH}/privkey.pem" "$SSL_CERTS_DIR/server.key" || error_exit "Failed to copy private key."
+  sudo cp "${CERT_PATH}/fullchain.pem" "$SSL_CERTS_DIR/server.crt" || error_exit "Failed to copy public certificate."
+  
+  # Configure certificate renewal using the shared function
+  configure_cert_renewal "$ONPREM_DOMAIN" "$CERT_PATH" "$SSL_CERTS_DIR" "$ONPREM_BASE_DIR"
+  
+  # Run validation script if available
+  if [ -f "$SCRIPT_DIR/validate_onprem_renewal.sh" ]; then
+    echo "Validation script found. You can verify your setup with:"
+    echo "sudo $SCRIPT_DIR/validate_onprem_renewal.sh"
+  fi
+  
+  echo "============================================================="
+  echo "Certificate renewal automation setup completed successfully."
+  echo "============================================================="
+}
+
+# ------------------------------------------------------------
 # Main Menu: Choose Mode
 # ------------------------------------------------------------
 echo "============================================================="
@@ -514,13 +664,15 @@ echo "1) Full Setup"
 echo "2) Verify Deployment"
 echo "3) Extract Credentials"
 echo "4) Create Credentials File"
+echo "5) Setup Certificate Renewal"
 echo "============================================================="
-read -p "Enter your choice (1, 2, 3, or 4): " choice
+read -p "Enter your choice (1, 2, 3, 4, or 5): " choice
 
 case "$choice" in
   1) setup_onprem ;;
   2) verify_onprem ;;
   3) extract_credentials ;;
   4) create_credentials_file ;;
+  5) setup_cert_renewal ;;
   *) echo "Invalid choice. Exiting." ; exit 1 ;;
 esac
