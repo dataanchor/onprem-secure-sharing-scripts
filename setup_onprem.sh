@@ -52,7 +52,7 @@ configure_cert_renewal() {
   local ssl_certs_dir=$3
   local base_dir=$4
   
-  print_header "Configuring Certificate Renewal"
+  echo "Configuring certificate renewal..."
   
   # Create the deploy hook script in the service directory
   SCRIPTS_DIR="$base_dir/scripts"
@@ -82,20 +82,20 @@ EOF
   sudo chmod +x "$DEPLOY_HOOK_SCRIPT"
   
   # Set up a daily cron job to attempt renewal with deploy hook
-  CRON_JOB="0 3 * * * sudo /usr/bin/certbot renew --cert-name ${domain} --deploy-hook $DEPLOY_HOOK_SCRIPT --quiet"
+  CRON_JOB="0 3 * * * /usr/bin/certbot renew --cert-name ${domain} --deploy-hook $DEPLOY_HOOK_SCRIPT --quiet"
   
   # Check if the cron job already exists before adding it
   if sudo crontab -l 2>/dev/null | grep -q "${domain}"; then
     # Remove old cron job
     sudo crontab -l 2>/dev/null | grep -v "${domain}" | sudo crontab -
-    print_warning "Replaced existing cron job for ${domain}"
+    echo "Replaced existing cron job for ${domain}"
   fi
   
   # Add the new cron job
   (sudo crontab -l 2>/dev/null; echo "$CRON_JOB") | sudo crontab -
-  print_success "Added daily renewal cron job for ${domain} running at 3:00 AM."
+  echo "Added daily renewal cron job for ${domain} running at 3:00 AM."
   
-  print_info "Certificate renewal has been configured:"
+  echo "Certificate renewal has been configured:"
   echo "- Deploy hook: $DEPLOY_HOOK_SCRIPT"
   echo "- Daily renewal check at 3:00 AM with deploy hook directly specified"
   echo "- Log file: $base_dir/certificate-renewal.log"
@@ -192,7 +192,7 @@ if [[ "$CREATE_CERT" =~ ^[Yy]$ ]]; then
     if sudo test -f "${CERT_PATH}/privkey.pem" && sudo test -f "${CERT_PATH}/fullchain.pem"; then
       sudo cp "${CERT_PATH}/privkey.pem" "$SSL_CERTS_DIR/server.key" || error_exit "Failed to copy private key."
       sudo cp "${CERT_PATH}/fullchain.pem" "$SSL_CERTS_DIR/server.crt" || error_exit "Failed to copy public certificate."
-      print_success "Certificate obtained and placed in $SSL_CERTS_DIR."
+      echo "Certificate obtained and placed in $SSL_CERTS_DIR."
       
       # Configure certificate renewal using the shared function
       configure_cert_renewal "$ONPREM_DOMAIN" "$CERT_PATH" "$SSL_CERTS_DIR" "$ONPREM_BASE_DIR"
@@ -348,9 +348,9 @@ echo "-------------------------------------------------------------"
 cd "$ONPREM_BASE_DIR" || error_exit "Failed to change directory to $ONPREM_BASE_DIR."
 docker compose up -d || error_exit "Failed to start On-Prem Sharing Service containers."
 
-print_info "Waiting 30 seconds for services to initialize..."
+echo "Waiting 30 seconds for services to initialize..."
 sleep 30
-print_success "Services started."
+echo "Services started."
 echo "-------------------------------------------------------------"
 echo
 
