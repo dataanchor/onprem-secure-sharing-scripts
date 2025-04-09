@@ -1,10 +1,40 @@
 #!/bin/bash
 set -e
 
+# Text formatting
+BOLD='\033[1m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+RED='\033[0;31m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
 # Function to display error messages and exit
 error_exit() {
-  echo "Error: $1" >&2
+  echo -e "${RED}Error: $1${NC}" >&2
   exit 1
+}
+
+# Function to print section header
+print_header() {
+  echo -e "\n${BOLD}$1${NC}"
+  echo "=============================================="
+}
+
+# Function to print success message
+print_success() {
+  echo -e "${GREEN}✓ $1${NC}"
+}
+
+# Function to print info message
+print_info() {
+  echo -e "${BLUE}ℹ $1${NC}"
+}
+
+# Function to print warning message
+print_warning() {
+  echo -e "${YELLOW}⚠ $1${NC}"
 }
 
 # Check if script is run with sudo
@@ -22,7 +52,7 @@ configure_cert_renewal() {
   local ssl_certs_dir=$3
   local base_dir=$4
   
-  echo "Configuring certificate renewal..."
+  print_header "Configuring Certificate Renewal"
   
   # Create the deploy hook script in the service directory
   SCRIPTS_DIR="$base_dir/scripts"
@@ -52,20 +82,20 @@ EOF
   sudo chmod +x "$DEPLOY_HOOK_SCRIPT"
   
   # Set up a daily cron job to attempt renewal with deploy hook
-  CRON_JOB="0 3 * * * /usr/bin/certbot renew --cert-name ${domain} --deploy-hook $DEPLOY_HOOK_SCRIPT --quiet"
+  CRON_JOB="0 3 * * * sudo /usr/bin/certbot renew --cert-name ${domain} --deploy-hook $DEPLOY_HOOK_SCRIPT --quiet"
   
   # Check if the cron job already exists before adding it
   if sudo crontab -l 2>/dev/null | grep -q "${domain}"; then
     # Remove old cron job
     sudo crontab -l 2>/dev/null | grep -v "${domain}" | sudo crontab -
-    echo "Replaced existing cron job for ${domain}"
+    print_warning "Replaced existing cron job for ${domain}"
   fi
   
   # Add the new cron job
   (sudo crontab -l 2>/dev/null; echo "$CRON_JOB") | sudo crontab -
-  echo "Added daily renewal cron job for ${domain} running at 3:00 AM."
+  print_success "Added daily renewal cron job for ${domain} running at 3:00 AM."
   
-  echo "Certificate renewal has been configured:"
+  print_info "Certificate renewal has been configured:"
   echo "- Deploy hook: $DEPLOY_HOOK_SCRIPT"
   echo "- Daily renewal check at 3:00 AM with deploy hook directly specified"
   echo "- Log file: $base_dir/certificate-renewal.log"
@@ -75,27 +105,20 @@ EOF
 # Setup Function: Full Installation and Configuration
 # ------------------------------------------------------------
 setup_onprem() {
-echo "Starting full setup..."
-
-# ------------------------------------------------------------
-# Header
-# ------------------------------------------------------------
-echo "============================================================="
-echo "      Fenixpyre On-Prem Sharing Service Setup Automation"
+print_header "Fenixpyre On-Prem Sharing Service Setup Automation"
 echo "This script will configure and start the On-Prem Sharing Service"
 echo "with PostgreSQL and TLS enabled for the public API."
-echo "============================================================="
+echo "=============================================="
 echo
 
-echo "Verifying system requirements..."
-echo "✓ Running with sudo privileges"
+print_info "Verifying system requirements..."
+print_success "Running with sudo privileges"
 echo
 
 # ------------------------------------------------------------
 # Step 1: Environment Setup - Creating Required Directories
 # ------------------------------------------------------------
-echo "-------------------------------------------------------------"
-echo "Step 1: Creating Required Directories"
+print_header "Step 1: Creating Required Directories"
 echo "Description: Creating directories for service configuration, certificates, and logs."
 echo "-------------------------------------------------------------"
 
@@ -111,15 +134,14 @@ echo "Creating directories: $MTLS_CERTS_DIR, $SSL_CERTS_DIR, and $LOGS_DIR"
 mkdir -p "$MTLS_CERTS_DIR" || error_exit "Failed to create mTLS certificates directory."
 mkdir -p "$SSL_CERTS_DIR" || error_exit "Failed to create SSL certificates directory."
 mkdir -p "$LOGS_DIR" || error_exit "Failed to create logs directory."
-echo "Directories created successfully."
+print_success "Directories created successfully."
 echo "-------------------------------------------------------------"
 echo
 
 # ------------------------------------------------------------
 # Step 2: mTLS Certificate Placement
 # ------------------------------------------------------------
-echo "-------------------------------------------------------------"
-echo "Step 2: mTLS Certificate Placement"
+print_header "Step 2: mTLS Certificate Placement"
 echo "Description: Prompting to place mTLS certificates provided by support."
 echo "-------------------------------------------------------------"
 
@@ -128,29 +150,27 @@ read -p "Press [Enter] after placing the mTLS certificates..."
 if [ ! -f "$MTLS_CERTS_DIR/server.crt" ] || [ ! -f "$MTLS_CERTS_DIR/server.key" ] || [ ! -f "$MTLS_CERTS_DIR/ca.crt" ]; then
   error_exit "mTLS certificates not found in $MTLS_CERTS_DIR. Exiting."
 fi
-echo "mTLS certificates confirmed."
+print_success "mTLS certificates confirmed."
 echo "-------------------------------------------------------------"
 echo
 
 # ------------------------------------------------------------
 # Step 3: Collecting Domain for TLS
 # ------------------------------------------------------------
-echo "-------------------------------------------------------------"
-echo "Step 3: Collecting Domain for TLS"
+print_header "Step 3: Collecting Domain for TLS"
 echo "Description: Prompting for the domain to obtain a TLS certificate."
 echo "-------------------------------------------------------------"
 
 read -p "Enter the domain for On-Prem Service (default: onpremsharing.example.com): " ONPREM_DOMAIN
 ONPREM_DOMAIN=${ONPREM_DOMAIN:-onpremsharing.example.com}
-echo "Domain set to: $ONPREM_DOMAIN"
+print_info "Domain set to: $ONPREM_DOMAIN"
 echo "-------------------------------------------------------------"
 echo
 
 # ------------------------------------------------------------
 # Step 4: TLS Certificate Retrieval for Public API
 # ------------------------------------------------------------
-echo "-------------------------------------------------------------"
-echo "Step 4: TLS Certificate Retrieval"
+print_header "Step 4: TLS Certificate Retrieval"
 echo "Description: Attempting to obtain or use an existing TLS certificate for the public API."
 echo "-------------------------------------------------------------"
 
@@ -159,20 +179,20 @@ read -p "Do you want to create a TLS certificate for ${ONPREM_DOMAIN} using Let'
 if [[ "$CREATE_CERT" =~ ^[Yy]$ ]]; then
   CERT_PATH="/etc/letsencrypt/live/${ONPREM_DOMAIN}"
   if sudo test -d "$CERT_PATH"; then
-    echo "Certificate for ${ONPREM_DOMAIN} already exists. Using existing certificate."
+    print_info "Certificate for ${ONPREM_DOMAIN} already exists. Using existing certificate."
     sudo cp "${CERT_PATH}/privkey.pem" "$SSL_CERTS_DIR/server.key" || error_exit "Failed to copy private key."
     sudo cp "${CERT_PATH}/fullchain.pem" "$SSL_CERTS_DIR/server.crt" || error_exit "Failed to copy public certificate."
   else
     if ! command -v certbot >/dev/null; then
-      echo "Certbot not found. Installing certbot."
+      print_warning "Certbot not found. Installing certbot."
       sudo apt-get update && sudo apt-get install -y certbot || error_exit "Failed to install Certbot."
     fi
-    echo "Obtaining certificate for ${ONPREM_DOMAIN} using standalone mode."
+    print_info "Obtaining certificate for ${ONPREM_DOMAIN} using standalone mode."
     sudo certbot certonly --non-interactive --agree-tos --standalone -d "${ONPREM_DOMAIN}" --register-unsafely-without-email || error_exit "Certbot failed to obtain certificate."
     if sudo test -f "${CERT_PATH}/privkey.pem" && sudo test -f "${CERT_PATH}/fullchain.pem"; then
       sudo cp "${CERT_PATH}/privkey.pem" "$SSL_CERTS_DIR/server.key" || error_exit "Failed to copy private key."
       sudo cp "${CERT_PATH}/fullchain.pem" "$SSL_CERTS_DIR/server.crt" || error_exit "Failed to copy public certificate."
-      echo "Certificate obtained and placed in $SSL_CERTS_DIR."
+      print_success "Certificate obtained and placed in $SSL_CERTS_DIR."
       
       # Configure certificate renewal using the shared function
       configure_cert_renewal "$ONPREM_DOMAIN" "$CERT_PATH" "$SSL_CERTS_DIR" "$ONPREM_BASE_DIR"
@@ -182,21 +202,20 @@ if [[ "$CREATE_CERT" =~ ^[Yy]$ ]]; then
     fi
   fi
 else
-  echo "Please place your public SSL certificates (server.crt and server.key) into $SSL_CERTS_DIR."
+  print_info "Please place your public SSL certificates (server.crt and server.key) into $SSL_CERTS_DIR."
   read -p "Press [Enter] after placing the certificates..."
   if [ ! -f "$SSL_CERTS_DIR/server.key" ] || [ ! -f "$SSL_CERTS_DIR/server.crt" ]; then
     error_exit "Certificates not found in $SSL_CERTS_DIR. Exiting."
   fi
 fi
-echo "TLS certificate setup complete."
+print_success "TLS certificate setup complete."
 echo "-------------------------------------------------------------"
 echo
 
 # ------------------------------------------------------------
 # Step 5: Collecting Remaining Configuration Details
 # ------------------------------------------------------------
-echo "-------------------------------------------------------------"
-echo "Step 5: Collecting Configuration Details"
+print_header "Step 5: Collecting Configuration Details"
 echo "Description: Prompting for MinIO details and security tokens."
 echo "-------------------------------------------------------------"
 
@@ -206,7 +225,7 @@ DB_USER="admin-user"
 DB_PASS="admin-pass"
 DB_NAME="secure-db"
 
-echo "Using default PostgreSQL configuration:"
+print_info "Using default PostgreSQL configuration:"
 echo "  Host: $DB_HOST"
 echo "  Database: $DB_NAME"
 echo
@@ -218,18 +237,21 @@ echo
 read -p "Enter MinIO bucket name: " MINIO_BUCKET
 
 read -p "Enter Connector Domain: " CONNECTOR_DOMAIN
-read -p "Enter Sharing Service Token: " SHARING_TOKEN
-read -p "Enter HMAC Secret: " HMAC_SECRET
 
-echo "Configuration details collected."
+# Generate secure tokens instead of prompting
+print_info "Generating secure tokens..."
+SHARING_TOKEN=$(openssl rand -hex 32)
+HMAC_SECRET=$(openssl rand -hex 32)
+print_success "Generated secure tokens successfully."
+
+print_success "Configuration details collected."
 echo "-------------------------------------------------------------"
 echo
 
 # ------------------------------------------------------------
 # Step 6: Generating config.yaml
 # ------------------------------------------------------------
-echo "-------------------------------------------------------------"
-echo "Step 6: Generating config.yaml"
+print_header "Step 6: Generating config.yaml"
 echo "Description: Creating configuration file for On-Prem Sharing Service."
 echo "-------------------------------------------------------------"
 
@@ -266,15 +288,14 @@ sharing_service_token: "${SHARING_TOKEN}"
 hmac_secret: "${HMAC_SECRET}"
 EOF
 
-echo "config.yaml generated at $CONFIG_FILE."
+print_success "config.yaml generated at $CONFIG_FILE."
 echo "-------------------------------------------------------------"
 echo
 
 # ------------------------------------------------------------
 # Step 7: Creating docker-compose.yaml
 # ------------------------------------------------------------
-echo "-------------------------------------------------------------"
-echo "Step 7: Creating Docker Compose File"
+print_header "Step 7: Creating Docker Compose File"
 echo "Description: Generating docker-compose.yaml to run On-Prem Sharing Service and PostgreSQL."
 echo "-------------------------------------------------------------"
 
@@ -313,32 +334,30 @@ volumes:
   pgdata:
 EOF
 
-echo "Docker Compose file created at $DOCKER_COMPOSE_FILE."
+print_success "Docker Compose file created at $DOCKER_COMPOSE_FILE."
 echo "-------------------------------------------------------------"
 echo
 
 # ------------------------------------------------------------
 # Step 8: Starting On-Prem Sharing Service
 # ------------------------------------------------------------
-echo "-------------------------------------------------------------"
-echo "Step 8: Starting On-Prem Sharing Service"
+print_header "Step 8: Starting On-Prem Sharing Service"
 echo "Description: Using Docker Compose to launch the service."
 echo "-------------------------------------------------------------"
 
 cd "$ONPREM_BASE_DIR" || error_exit "Failed to change directory to $ONPREM_BASE_DIR."
 docker compose up -d || error_exit "Failed to start On-Prem Sharing Service containers."
 
-echo "Waiting 30 seconds for services to initialize..."
+print_info "Waiting 30 seconds for services to initialize..."
 sleep 30
-echo "Services started."
+print_success "Services started."
 echo "-------------------------------------------------------------"
 echo
 
 # ------------------------------------------------------------
 # Step 9: Public API Health Check
 # ------------------------------------------------------------
-echo "-------------------------------------------------------------"
-echo "Step 9: Public API Health Check"
+print_header "Step 9: Public API Health Check"
 echo "Description: Verifying that the public API of the On-Prem Sharing Service is running and healthy."
 echo "-------------------------------------------------------------"
 
@@ -347,10 +366,10 @@ HTTP_STATUS=$(curl -ks -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo "Fai
 echo "HTTP Status Code from public API health check: $HTTP_STATUS"
 
 if [ "$HTTP_STATUS" -eq 200 ]; then
-  echo "Public API is healthy and running at https://${ONPREM_DOMAIN}"
+  print_success "Public API is healthy and running at https://${ONPREM_DOMAIN}"
 else
-  echo "Public API health check failed with status code $HTTP_STATUS."
-  echo "Please verify your setup."
+  print_warning "Public API health check failed with status code $HTTP_STATUS."
+  print_warning "Please verify your setup."
   exit 1
 fi
 echo "-------------------------------------------------------------"
@@ -359,8 +378,7 @@ echo
 # ------------------------------------------------------------
 # Step 10: Private API Health Check
 # ------------------------------------------------------------
-echo "-------------------------------------------------------------"
-echo "Step 10: Private API Health Check"
+print_header "Step 10: Private API Health Check"
 echo "Description: Verifying that the private API is running and healthy using mTLS."
 echo "-------------------------------------------------------------"
 
@@ -383,10 +401,10 @@ PRIVATE_API_STATUS=$(curl -k \
 echo "HTTP Status Code from private API health check: $PRIVATE_API_STATUS"
 
 if [ "$PRIVATE_API_STATUS" -eq 200 ]; then
-  echo "Private API is healthy and accessible."
+  print_success "Private API is healthy and accessible."
 else
-  echo "Private API health check failed with status code $PRIVATE_API_STATUS."
-  echo "Please verify your private API setup."
+  print_warning "Private API health check failed with status code $PRIVATE_API_STATUS."
+  print_warning "Please verify your private API setup."
   exit 1
 fi
 echo "-------------------------------------------------------------"
@@ -395,8 +413,7 @@ echo
 # ------------------------------------------------------------
 # Step 11: Create Details File
 # ------------------------------------------------------------
-echo "-------------------------------------------------------------"
-echo "Step 11: Creating Details File"
+print_header "Step 11: Creating Details File"
 echo "Description: Creating a file with public URL, private URL, sharing service token, and HMAC token."
 echo "-------------------------------------------------------------"
 
@@ -410,20 +427,19 @@ Sharing Service Token: ${SHARING_TOKEN}
 HMAC Secret: ${HMAC_SECRET}
 EOF
 
-echo "Details file created at $DETAILS_FILE."
+print_success "Details file created at $DETAILS_FILE."
 echo "-------------------------------------------------------------"
 echo
 
 # ------------------------------------------------------------
 # Footer
 # ------------------------------------------------------------
-echo "============================================================="
-echo "       On-Prem Sharing Service Setup Completed Successfully"
+print_header "On-Prem Sharing Service Setup Completed Successfully"
 echo "Your On-Prem Sharing Service is now up and running."
-echo "============================================================="
+echo "=============================================="
 
   
-  echo "Full setup completed."
+  print_success "Full setup completed."
 }
 
 # ------------------------------------------------------------
