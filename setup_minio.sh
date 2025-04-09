@@ -1,15 +1,45 @@
 #!/bin/bash
 set -e
 
+# Text formatting
+BOLD='\033[1m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+RED='\033[0;31m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
 # Function to display error messages and exit
 error_exit() {
   echo -e "${RED}Error: $1${NC}" >&2
   exit 1
 }
 
+# Function to print section header
+print_header() {
+  echo -e "\n${BOLD}$1${NC}"
+  echo "=============================================="
+}
+
+# Function to print success message
+print_success() {
+  echo -e "${GREEN}✓ $1${NC}"
+}
+
+# Function to print info message
+print_info() {
+  echo -e "${BLUE}ℹ $1${NC}"
+}
+
+# Function to print warning message
+print_warning() {
+  echo -e "${YELLOW}⚠ $1${NC}"
+}
+
 # Check if script is run as root/sudo
 if [ "$EUID" -ne 0 ]; then
-  echo "Please run this script with sudo"
+  echo -e "${RED}Please run this script with sudo${NC}"
   exit 1
 fi
 
@@ -21,7 +51,7 @@ configure_cert_renewal() {
   local certs_dir=$3
   local base_dir=$4
   
-  echo "Configuring certificate renewal..."
+  print_header "Configuring Certificate Renewal"
   
   # Create the deploy hook script in the service directory
   SCRIPTS_DIR="$base_dir/scripts"
@@ -51,20 +81,20 @@ EOF
   sudo chmod +x "$DEPLOY_HOOK_SCRIPT"
   
   # Set up a daily cron job to attempt renewal with deploy hook
-  CRON_JOB="0 3 * * * /usr/bin/certbot renew --cert-name ${domain} --deploy-hook $DEPLOY_HOOK_SCRIPT --quiet"
+  CRON_JOB="0 3 * * * sudo /usr/bin/certbot renew --cert-name ${domain} --deploy-hook $DEPLOY_HOOK_SCRIPT --quiet"
   
   # Check if the cron job already exists before adding it
   if sudo crontab -l 2>/dev/null | grep -q "${domain}"; then
     # Remove old cron job
     sudo crontab -l 2>/dev/null | grep -v "${domain}" | sudo crontab -
-    echo "Replaced existing cron job for ${domain}"
+    print_warning "Replaced existing cron job for ${domain}"
   fi
   
   # Add the new cron job
   (sudo crontab -l 2>/dev/null; echo "$CRON_JOB") | sudo crontab -
-  echo "Added daily renewal cron job for ${domain} running at 3:00 AM."
+  print_success "Added daily renewal cron job for ${domain} running at 3:00 AM."
   
-  echo "Certificate renewal has been configured:"
+  print_info "Certificate renewal has been configured:"
   echo "- Deploy hook: $DEPLOY_HOOK_SCRIPT"
   echo "- Daily renewal check at 3:00 AM with deploy hook directly specified"
   echo "- Log file: $base_dir/certificate-renewal.log"
@@ -76,7 +106,7 @@ show_menu() {
   echo "1) Setup MinIO"
   echo "2) Setup Certificate Renewal"
   echo "3) Exit"
-  echo "============================================================="
+  echo "=============================================="
   read -p "Enter your choice (1-3): " CHOICE
   
   case "$CHOICE" in
