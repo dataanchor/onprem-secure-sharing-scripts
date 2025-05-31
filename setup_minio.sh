@@ -267,7 +267,7 @@ version: '3.7'
 services:
   minio:
     container_name: minio
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-05-24T17-08-30Z
     command: server /data
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
@@ -345,6 +345,7 @@ EOF
   
   # Add lifecycle rule to the bucket with /downloads prefix
   echo "Adding lifecycle rule to bucket for /downloads prefix..."
+  docker exec minio mc ilm add local/${BUCKET_NAME} --expire-days 1 --prefix "downloads" --insecure
   docker exec minio mc ilm add local/${BUCKET_NAME} --expire-days 1 --prefix "/downloads" --insecure
 
   echo "MinIO setup completed with lifecycle rule configured for '${BUCKET_NAME}/downloads' prefix."
