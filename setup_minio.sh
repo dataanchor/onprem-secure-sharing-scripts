@@ -324,8 +324,6 @@ setup_minio() {
   DOCKER_COMPOSE_FILE="$MINIO_BASE_DIR/docker-compose.yaml"
 
   cat > "$DOCKER_COMPOSE_FILE" <<EOF
-version: '3.7'
-
 services:
   minio:
     container_name: minio

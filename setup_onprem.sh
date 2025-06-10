@@ -364,7 +364,6 @@ echo "-------------------------------------------------------------"
 
 DOCKER_COMPOSE_FILE="$ONPREM_BASE_DIR/docker-compose.yaml"
 cat > "$DOCKER_COMPOSE_FILE" <<EOF
-version: '3.7'
 
 services:
   postgres:
