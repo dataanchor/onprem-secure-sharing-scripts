@@ -37,11 +37,61 @@ print_warning() {
   echo -e "${YELLOW}⚠ $1${NC}"
 }
 
+# Function to check and install Docker and Docker Compose
+check_docker_installation() {
+  print_header "Checking Docker Installation"
+  
+  # Check if Docker or Docker Compose is not installed
+  if ! command -v docker &> /dev/null || ! command -v docker-compose &> /dev/null; then
+    print_warning "Docker or Docker Compose is not installed."
+    read -p "Would you like to install Docker and Docker Compose? (y/N): " INSTALL_DOCKER
+    
+    if [[ "$INSTALL_DOCKER" =~ ^[Yy]$ ]]; then
+      print_info "Installing Docker and Docker Compose..."
+      
+      # Remove old versions if they exist
+      sudo apt-get remove docker docker-engine docker.io containerd runc || true
+      
+      # Update package index
+      sudo apt-get update
+      
+      # Install prerequisites
+      sudo apt-get install -y \
+          apt-transport-https \
+          ca-certificates \
+          curl \
+          gnupg \
+          lsb-release
+      
+      # Add Docker's official GPG key
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+      
+      # Set up the stable repository
+      echo \
+        "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu \
+        $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+      
+      # Install Docker Engine and Docker Compose
+      sudo apt-get update
+      sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose
+      
+      print_success "Docker and Docker Compose installed successfully."
+    else
+      error_exit "Docker and Docker Compose are required to run this script. Please install them and try again."
+    fi
+  else
+    print_success "Docker and Docker Compose are installed."
+  fi
+}
+
 # Check if script is run as root/sudo
 if [ "$EUID" -ne 0 ]; then
   echo -e "${RED}Please run this script with sudo${NC}"
   exit 1
 fi
+
+# Check Docker installation before proceeding
+check_docker_installation
 
 # Configure Certificate Renewal Function
 # This is a reusable function for both full setup and standalone renewal
@@ -197,8 +247,20 @@ setup_minio() {
     fi
   done
 
-  read -p "Enter bucket name [default: data]: " BUCKET_NAME
-  BUCKET_NAME=${BUCKET_NAME:-data}
+  while true; do
+    read -p "Enter bucket name [default: data]: " BUCKET_NAME
+    BUCKET_NAME=${BUCKET_NAME:-data}
+    # Validate bucket name according to MinIO rules
+    if [[ "$BUCKET_NAME" =~ ^[a-z0-9][a-z0-9.-]*$ ]] && [ ${#BUCKET_NAME} -ge 3 ] && [ ${#BUCKET_NAME} -le 63 ]; then
+      break
+    else
+      echo "Invalid bucket name. Bucket name must:"
+      echo "- Be between 3 and 63 characters long"
+      echo "- Start with a letter or number"
+      echo "- Contain only lowercase letters, numbers, dots, and hyphens"
+      echo "- Be a valid DNS name"
+    fi
+  done
 
   echo "Domain, credentials, and bucket name collected."
   echo "-------------------------------------------------------------"
@@ -262,16 +324,14 @@ setup_minio() {
   DOCKER_COMPOSE_FILE="$MINIO_BASE_DIR/docker-compose.yaml"
 
   cat > "$DOCKER_COMPOSE_FILE" <<EOF
-version: '3.7'
-
 services:
   minio:
     container_name: minio
     image: minio/minio:RELEASE.2025-05-24T17-08-30Z
     command: server /data
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
     ports:
       - "443:9000"
       - "9001:9001"

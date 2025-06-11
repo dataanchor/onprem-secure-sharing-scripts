@@ -37,10 +37,60 @@ print_warning() {
   echo -e "${YELLOW}⚠ $1${NC}"
 }
 
+# Function to check and install Docker and Docker Compose
+check_docker_installation() {
+  print_header "Checking Docker Installation"
+  
+  # Check if Docker or Docker Compose is not installed
+  if ! command -v docker &> /dev/null || ! command -v docker-compose &> /dev/null; then
+    print_warning "Docker or Docker Compose is not installed."
+    read -p "Would you like to install Docker and Docker Compose? (y/N): " INSTALL_DOCKER
+    
+    if [[ "$INSTALL_DOCKER" =~ ^[Yy]$ ]]; then
+      print_info "Installing Docker and Docker Compose..."
+      
+      # Remove old versions if they exist
+      sudo apt-get remove docker docker-engine docker.io containerd runc || true
+      
+      # Update package index
+      sudo apt-get update
+      
+      # Install prerequisites
+      sudo apt-get install -y \
+          apt-transport-https \
+          ca-certificates \
+          curl \
+          gnupg \
+          lsb-release
+      
+      # Add Docker's official GPG key
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+      
+      # Set up the stable repository
+      echo \
+        "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu \
+        $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+      
+      # Install Docker Engine and Docker Compose
+      sudo apt-get update
+      sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose
+      
+      print_success "Docker and Docker Compose installed successfully."
+    else
+      error_exit "Docker and Docker Compose are required to run this script. Please install them and try again."
+    fi
+  else
+    print_success "Docker and Docker Compose are installed."
+  fi
+}
+
 # Check if script is run with sudo
 if [ "$EUID" -ne 0 ]; then
   error_exit "This script must be run with sudo privileges. Please run with: sudo $0"
 fi
+
+# Check Docker installation before proceeding
+check_docker_installation
 
 # ------------------------------------------------------------
 # Configure Certificate Renewal Function
@@ -231,12 +281,25 @@ echo "  Database: $DB_NAME"
 echo
 
 read -p "Enter MinIO endpoint (e.g., minio.onpremsharing.example.com): " MINIO_ENDPOINT
-read -p "Enter MinIO Access Key ID: " MINIO_ID
-read -sp "Enter MinIO Secret Access Key: " MINIO_KEY
+read -p "Enter MinIO root user: " MINIO_ID
+read -sp "Enter MinIO root password: " MINIO_KEY
 echo
-read -p "Enter MinIO bucket name: " MINIO_BUCKET
 
-read -p "Enter Connector Domain: " CONNECTOR_DOMAIN
+while true; do
+  read -p "Enter MinIO bucket name: " MINIO_BUCKET
+  # Validate bucket name according to MinIO rules
+  if [[ "$MINIO_BUCKET" =~ ^[a-z0-9][a-z0-9.-]*$ ]] && [ ${#MINIO_BUCKET} -ge 3 ] && [ ${#MINIO_BUCKET} -le 63 ]; then
+    break
+  else
+    echo "Invalid bucket name. Bucket name must:"
+    echo "- Be between 3 and 63 characters long"
+    echo "- Start with a letter or number"
+    echo "- Contain only lowercase letters, numbers, dots, and hyphens"
+    echo "- Be a valid DNS name"
+  fi
+done
+
+read -p "Enter your FenixPyre organization ID: " CONNECTOR_DOMAIN
 
 # Generate secure tokens instead of prompting
 print_info "Generating secure tokens..."
@@ -301,7 +364,6 @@ echo "-------------------------------------------------------------"
 
 DOCKER_COMPOSE_FILE="$ONPREM_BASE_DIR/docker-compose.yaml"
 cat > "$DOCKER_COMPOSE_FILE" <<EOF
-version: '3.7'
 
 services:
   postgres:
