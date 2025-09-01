@@ -1,756 +1,192 @@
 #!/bin/bash
+# Fenixpyre Onprem Secure Sharing Service - Self-Extracting Installer
+# Generated automatically - Do not edit manually
+
 set -e
 
-# Text formatting
-BOLD='\033[1m'
+# Colors for output
 GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-RED='\033[0;31m'
 BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
 
-# Function to display error messages and exit
-error_exit() {
-  echo -e "${RED}Error: $1${NC}" >&2
-  exit 1
-}
-
-# Function to print section header
-print_header() {
-  echo -e "\n${BOLD}$1${NC}"
-  echo "=============================================="
-}
-
-# Function to print success message
-print_success() {
-  echo -e "${GREEN}✓ $1${NC}"
-}
-
-# Function to print info message
 print_info() {
-  echo -e "${BLUE}ℹ $1${NC}"
+    echo -e "${BLUE}ℹ${NC} $1"
 }
 
-# Function to print warning message
+print_success() {
+    echo -e "${GREEN}✓${NC} $1"
+}
+
 print_warning() {
-  echo -e "${YELLOW}⚠ $1${NC}"
+    echo -e "${YELLOW}⚠${NC} $1"
 }
 
-# Function to check and install Docker and Docker Compose
-check_docker_installation() {
-  print_header "Checking Docker Installation"
-  
-  # Check if Docker or Docker Compose is not installed
-  if ! command -v docker &> /dev/null || ! command -v docker-compose &> /dev/null; then
-    print_warning "Docker or Docker Compose is not installed."
-    read -p "Would you like to install Docker and Docker Compose? (y/N): " INSTALL_DOCKER
+print_error() {
+    echo -e "${RED}✗${NC} $1"
+}
+
+print_header() {
+    echo -e "\n${GREEN}=============================================="
+    echo -e "$1"
+    echo -e "==============================================${NC}\n"
+}
+
+# Get the current working directory where the script is run  
+ORIGINAL_DIR="$(pwd)"
+EXTRACT_DIR="$ORIGINAL_DIR/onprem-sharing-scripts"
+
+# Function to extract embedded files
+extract_files() {
+    print_header "Fenixpyre Onprem Secure Sharing Service Installer"
+    print_info "Extracting installation files..."
     
-    if [[ "$INSTALL_DOCKER" =~ ^[Yy]$ ]]; then
-      print_info "Installing Docker and Docker Compose..."
-      
-      # Remove old versions if they exist
-      sudo apt-get remove docker docker-engine docker.io containerd runc || true
-      
-      # Update package index
-      sudo apt-get update
-      
-      # Install prerequisites
-      sudo apt-get install -y \
-          apt-transport-https \
-          ca-certificates \
-          curl \
-          gnupg \
-          lsb-release
-      
-      # Add Docker's official GPG key
-      curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-      
-      # Set up the stable repository
-      echo \
-        "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu \
-        $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-      
-      # Install Docker Engine and Docker Compose
-      sudo apt-get update
-      sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose
-      
-      print_success "Docker and Docker Compose installed successfully."
-    else
-      error_exit "Docker and Docker Compose are required to run this script. Please install them and try again."
-    fi
-  else
-    print_success "Docker and Docker Compose are installed."
-  fi
-}
-
-# Check if script is run with sudo
-if [ "$EUID" -ne 0 ]; then
-  error_exit "This script must be run with sudo privileges. Please run with: sudo $0"
-fi
-
-# Check Docker installation before proceeding
-check_docker_installation
-
-# ------------------------------------------------------------
-# Configure Certificate Renewal Function
-# This is a reusable function for both full setup and standalone renewal
-# ------------------------------------------------------------
-configure_cert_renewal() {
-  local domain=$1
-  local cert_path=$2
-  local ssl_certs_dir=$3
-  local base_dir=$4
-  
-  print_header "Configuring Certificate Renewal"
-  
-  # Create the deploy hook script in the service directory
-  SCRIPTS_DIR="$base_dir/scripts"
-  mkdir -p "$SCRIPTS_DIR"
-  DEPLOY_HOOK_SCRIPT="$SCRIPTS_DIR/cert-deploy-hook.sh"
-  
-  # Create the deploy hook script
-  sudo tee "$DEPLOY_HOOK_SCRIPT" > /dev/null << EOF
-#!/bin/bash
-# Let's Encrypt certificate renewal deploy hook for OnPrem Service
-
-# Check if this renewal is for our domain
-if [[ "\$RENEWED_DOMAINS" == *"${domain}"* ]]; then
-  # Copy the renewed certificates to the service location
-  cp "\$RENEWED_LINEAGE/privkey.pem" "$ssl_certs_dir/server.key"
-  cp "\$RENEWED_LINEAGE/fullchain.pem" "$ssl_certs_dir/server.crt"
-  
-  # Restart the container to apply new certificates
-  cd "$base_dir" && docker compose restart onprem
-  
-  # Log the renewal
-  echo "\$(date): Renewed certificates for ${domain} and restarted OnPrem service" >> "$base_dir/certificate-renewal.log"
-fi
-EOF
-  
-  # Make the deploy hook executable
-  sudo chmod +x "$DEPLOY_HOOK_SCRIPT"
-  
-  # Set up a daily cron job to attempt renewal with deploy hook
-  CRON_JOB="0 3 * * * sudo /usr/bin/certbot renew --cert-name ${domain} --deploy-hook $DEPLOY_HOOK_SCRIPT --quiet"
-  
-  # Check if the cron job already exists before adding it
-  if sudo crontab -l 2>/dev/null | grep -q "${domain}"; then
-    # Remove old cron job
-    sudo crontab -l 2>/dev/null | grep -v "${domain}" | sudo crontab -
-    print_warning "Replaced existing cron job for ${domain}"
-  fi
-  
-  # Add the new cron job
-  (sudo crontab -l 2>/dev/null; echo "$CRON_JOB") | sudo crontab -
-  print_success "Added daily renewal cron job for ${domain} running at 3:00 AM."
-  
-  print_info "Certificate renewal has been configured:"
-  echo "- Deploy hook: $DEPLOY_HOOK_SCRIPT"
-  echo "- Daily renewal check at 3:00 AM with deploy hook directly specified"
-  echo "- Log file: $base_dir/certificate-renewal.log"
-}
-
-# ------------------------------------------------------------
-# Setup Function: Full Installation and Configuration
-# ------------------------------------------------------------
-setup_onprem() {
-print_header "Fenixpyre On-Prem Sharing Service Setup Automation"
-echo "This script will configure and start the On-Prem Sharing Service"
-echo "with PostgreSQL and TLS enabled for the public API."
-echo "=============================================="
-echo
-
-print_info "Verifying system requirements..."
-print_success "Running with sudo privileges"
-echo
-
-# ------------------------------------------------------------
-# Step 1: Environment Setup - Creating Required Directories
-# ------------------------------------------------------------
-print_header "Step 1: Creating Required Directories"
-echo "Description: Creating directories for service configuration, certificates, and logs."
-echo "-------------------------------------------------------------"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-echo "Script is running from: $SCRIPT_DIR"
-
-ONPREM_BASE_DIR="$SCRIPT_DIR/onpremsharing"
-MTLS_CERTS_DIR="$ONPREM_BASE_DIR/certs/mtls"
-SSL_CERTS_DIR="$ONPREM_BASE_DIR/certs/ssl"
-LOGS_DIR="$ONPREM_BASE_DIR/logs"
-
-echo "Creating directories: $MTLS_CERTS_DIR, $SSL_CERTS_DIR, and $LOGS_DIR"
-mkdir -p "$MTLS_CERTS_DIR" || error_exit "Failed to create mTLS certificates directory."
-mkdir -p "$SSL_CERTS_DIR" || error_exit "Failed to create SSL certificates directory."
-mkdir -p "$LOGS_DIR" || error_exit "Failed to create logs directory."
-print_success "Directories created successfully."
-echo "-------------------------------------------------------------"
-echo
-
-# ------------------------------------------------------------
-# Step 2: mTLS Certificate Placement
-# ------------------------------------------------------------
-print_header "Step 2: mTLS Certificate Placement"
-echo "Description: Prompting to place mTLS certificates provided by support."
-echo "-------------------------------------------------------------"
-
-echo "Place your mTLS certificates (server.crt, server.key, ca.crt) into $MTLS_CERTS_DIR."
-read -p "Press [Enter] after placing the mTLS certificates..."
-if [ ! -f "$MTLS_CERTS_DIR/server.crt" ] || [ ! -f "$MTLS_CERTS_DIR/server.key" ] || [ ! -f "$MTLS_CERTS_DIR/ca.crt" ]; then
-  error_exit "mTLS certificates not found in $MTLS_CERTS_DIR. Exiting."
-fi
-print_success "mTLS certificates confirmed."
-echo "-------------------------------------------------------------"
-echo
-
-# ------------------------------------------------------------
-# Step 3: Collecting Domain for TLS
-# ------------------------------------------------------------
-print_header "Step 3: Collecting Domain for TLS"
-echo "Description: Prompting for the domain to obtain a TLS certificate."
-echo "-------------------------------------------------------------"
-
-read -p "Enter the domain for On-Prem Service (default: onpremsharing.example.com): " ONPREM_DOMAIN
-ONPREM_DOMAIN=${ONPREM_DOMAIN:-onpremsharing.example.com}
-print_info "Domain set to: $ONPREM_DOMAIN"
-echo "-------------------------------------------------------------"
-echo
-
-# ------------------------------------------------------------
-# Step 4: TLS Certificate Retrieval for Public API
-# ------------------------------------------------------------
-print_header "Step 4: TLS Certificate Retrieval"
-echo "Description: Attempting to obtain or use an existing TLS certificate for the public API."
-echo "-------------------------------------------------------------"
-
-read -p "Do you want to create a TLS certificate for ${ONPREM_DOMAIN} using Let's Encrypt? (y/N): " CREATE_CERT
-
-if [[ "$CREATE_CERT" =~ ^[Yy]$ ]]; then
-  CERT_PATH="/etc/letsencrypt/live/${ONPREM_DOMAIN}"
-  if sudo test -d "$CERT_PATH"; then
-    print_info "Certificate for ${ONPREM_DOMAIN} already exists. Using existing certificate."
-    sudo cp "${CERT_PATH}/privkey.pem" "$SSL_CERTS_DIR/server.key" || error_exit "Failed to copy private key."
-    sudo cp "${CERT_PATH}/fullchain.pem" "$SSL_CERTS_DIR/server.crt" || error_exit "Failed to copy public certificate."
-  else
-    if ! command -v certbot >/dev/null; then
-      print_warning "Certbot not found. Installing certbot."
-      sudo apt-get update && sudo apt-get install -y certbot || error_exit "Failed to install Certbot."
-    fi
-    print_info "Obtaining certificate for ${ONPREM_DOMAIN} using standalone mode."
-    sudo certbot certonly --non-interactive --agree-tos --standalone -d "${ONPREM_DOMAIN}" --register-unsafely-without-email || error_exit "Certbot failed to obtain certificate."
-    if sudo test -f "${CERT_PATH}/privkey.pem" && sudo test -f "${CERT_PATH}/fullchain.pem"; then
-      sudo cp "${CERT_PATH}/privkey.pem" "$SSL_CERTS_DIR/server.key" || error_exit "Failed to copy private key."
-      sudo cp "${CERT_PATH}/fullchain.pem" "$SSL_CERTS_DIR/server.crt" || error_exit "Failed to copy public certificate."
-      print_success "Certificate obtained and placed in $SSL_CERTS_DIR."
-      
-      # Configure certificate renewal using the shared function
-      configure_cert_renewal "$ONPREM_DOMAIN" "$CERT_PATH" "$SSL_CERTS_DIR" "$ONPREM_BASE_DIR"
-      
-    else
-      error_exit "Failed to obtain certificate for ${ONPREM_DOMAIN}. Exiting."
-    fi
-  fi
-else
-  print_info "Please place your public SSL certificates (server.crt and server.key) into $SSL_CERTS_DIR."
-  read -p "Press [Enter] after placing the certificates..."
-  if [ ! -f "$SSL_CERTS_DIR/server.key" ] || [ ! -f "$SSL_CERTS_DIR/server.crt" ]; then
-    error_exit "Certificates not found in $SSL_CERTS_DIR. Exiting."
-  fi
-fi
-print_success "TLS certificate setup complete."
-echo "-------------------------------------------------------------"
-echo
-
-# ------------------------------------------------------------
-# Step 5: Collecting Remaining Configuration Details
-# ------------------------------------------------------------
-print_header "Step 5: Collecting Configuration Details"
-echo "Description: Prompting for MinIO details and security tokens."
-echo "-------------------------------------------------------------"
-
-# Using fixed PostgreSQL credentials
-DB_HOST="postgres"
-DB_USER="admin-user"
-DB_PASS="admin-pass"
-DB_NAME="secure-db"
-
-print_info "Using default PostgreSQL configuration:"
-echo "  Host: $DB_HOST"
-echo "  Database: $DB_NAME"
-echo
-
-read -p "Enter MinIO endpoint (e.g., minio.onpremsharing.example.com): " MINIO_ENDPOINT
-read -p "Enter MinIO root user: " MINIO_ID
-read -sp "Enter MinIO root password: " MINIO_KEY
-echo
-
-while true; do
-  read -p "Enter MinIO bucket name: " MINIO_BUCKET
-  # Validate bucket name according to MinIO rules
-  if [[ "$MINIO_BUCKET" =~ ^[a-z0-9][a-z0-9.-]*$ ]] && [ ${#MINIO_BUCKET} -ge 3 ] && [ ${#MINIO_BUCKET} -le 63 ]; then
-    break
-  else
-    echo "Invalid bucket name. Bucket name must:"
-    echo "- Be between 3 and 63 characters long"
-    echo "- Start with a letter or number"
-    echo "- Contain only lowercase letters, numbers, dots, and hyphens"
-    echo "- Be a valid DNS name"
-  fi
-done
-
-read -p "Enter your FenixPyre organization ID: " CONNECTOR_DOMAIN
-
-# Generate secure tokens instead of prompting
-print_info "Generating secure tokens..."
-SHARING_TOKEN=$(openssl rand -hex 32)
-HMAC_SECRET=$(openssl rand -hex 32)
-print_success "Generated secure tokens successfully."
-
-print_success "Configuration details collected."
-echo "-------------------------------------------------------------"
-echo
-
-# ------------------------------------------------------------
-# Step 6: Generating config.yaml
-# ------------------------------------------------------------
-print_header "Step 6: Generating config.yaml"
-echo "Description: Creating configuration file for On-Prem Sharing Service."
-echo "-------------------------------------------------------------"
-
-CONFIG_FILE="$ONPREM_BASE_DIR/config.yaml"
-cat > "$CONFIG_FILE" <<EOF
-public_port: "443"
-private_port: "8080"
-host_url: "https://${ONPREM_DOMAIN}"
-
-db:
-  host: ${DB_HOST}
-  port: "5432"
-  user: ${DB_USER}
-  password: ${DB_PASS}
-  name: ${DB_NAME}
-
-minio:
-  endpoint: "${MINIO_ENDPOINT}"
-  access_key_id: "${MINIO_ID}"
-  secret_access_key: "${MINIO_KEY}"
-  bucket_name: "${MINIO_BUCKET}"
-
-certificate:
-  cert_file: "mtls/certs/server.crt"
-  key_file: "mtls/certs/server.key"
-  ca_file: "mtls/certs/ca.crt"
-
-public_certificate:
-  cert_file: "ssl/certs/server.crt"
-  key_file: "ssl/certs/server.key"
-
-connector_domain: "${CONNECTOR_DOMAIN}"
-sharing_service_token: "${SHARING_TOKEN}"
-hmac_secret: "${HMAC_SECRET}"
-EOF
-
-print_success "config.yaml generated at $CONFIG_FILE."
-echo "-------------------------------------------------------------"
-echo
-
-# ------------------------------------------------------------
-# Step 7: Creating docker-compose.yaml
-# ------------------------------------------------------------
-print_header "Step 7: Creating Docker Compose File"
-echo "Description: Generating docker-compose.yaml to run On-Prem Sharing Service and PostgreSQL."
-echo "-------------------------------------------------------------"
-
-DOCKER_COMPOSE_FILE="$ONPREM_BASE_DIR/docker-compose.yaml"
-cat > "$DOCKER_COMPOSE_FILE" <<EOF
-
-services:
-  postgres:
-    image: postgres:14
-    restart: always
-    environment:
-      POSTGRES_USER: ${DB_USER}
-      POSTGRES_PASSWORD: ${DB_PASS}
-      POSTGRES_DB: ${DB_NAME}
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-
-  onprem:
-    image: datanchorio/fenixpyre-onprem-secure-sharing-service:1.0
-    restart: on-failure
-    ports:
-      - "8080:8080"
-      - "443:443"
-    volumes:
-      - ./config.yaml:/app/config.yaml
-      - ./logs/:/app/logs/
-      - ./certs/mtls:/app/mtls/certs
-      - ./certs/ssl:/app/ssl/certs
-    depends_on:
-      - postgres
-
-volumes:
-  pgdata:
-EOF
-
-print_success "Docker Compose file created at $DOCKER_COMPOSE_FILE."
-echo "-------------------------------------------------------------"
-echo
-
-# ------------------------------------------------------------
-# Step 8: Starting On-Prem Sharing Service
-# ------------------------------------------------------------
-print_header "Step 8: Starting On-Prem Sharing Service"
-echo "Description: Using Docker Compose to launch the service."
-echo "-------------------------------------------------------------"
-
-cd "$ONPREM_BASE_DIR" || error_exit "Failed to change directory to $ONPREM_BASE_DIR."
-docker compose up -d || error_exit "Failed to start On-Prem Sharing Service containers."
-
-print_info "Waiting 30 seconds for services to initialize..."
-sleep 30
-print_success "Services started."
-echo "-------------------------------------------------------------"
-echo
-
-# ------------------------------------------------------------
-# Step 9: Public API Health Check
-# ------------------------------------------------------------
-print_header "Step 9: Public API Health Check"
-echo "Description: Verifying that the public API of the On-Prem Sharing Service is running and healthy."
-echo "-------------------------------------------------------------"
-
-HEALTH_URL="https://${ONPREM_DOMAIN}/health"
-HTTP_STATUS=$(curl -ks -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo "Failed to connect")
-echo "HTTP Status Code from public API health check: $HTTP_STATUS"
-
-if [ "$HTTP_STATUS" -eq 200 ]; then
-  print_success "Public API is healthy and running at https://${ONPREM_DOMAIN}"
-else
-  print_warning "Public API health check failed with status code $HTTP_STATUS."
-  print_warning "Please verify your setup."
-  exit 1
-fi
-echo "-------------------------------------------------------------"
-echo
-
-# ------------------------------------------------------------
-# Step 10: Private API Health Check
-# ------------------------------------------------------------
-print_header "Step 10: Private API Health Check"
-echo "Description: Verifying that the private API is running and healthy using mTLS."
-echo "-------------------------------------------------------------"
-
-read -p "Enter the public IP address of this VM: " PUBLIC_IP
-
-# Reuse mTLS certificates placed in Step 2 for client authentication
-CLIENT_CERT="$MTLS_CERTS_DIR/server.crt"
-CLIENT_KEY="$MTLS_CERTS_DIR/server.key"
-
-PRIVATE_API_URL="https://${PUBLIC_IP}:8080/health"
-PRIVATE_API_STATUS=$(curl -k \
-  --cert "$CLIENT_CERT" \
-  --key "$CLIENT_KEY" \
-  -H "d-user-id: test@example.com" \
-  -H "d-agent-id: test-agent-001" \
-  -H "d-org-id: test-org-001" \
-  -o /dev/null \
-  -w "%{http_code}" \
-  "$PRIVATE_API_URL" || echo "Failed")
-echo "HTTP Status Code from private API health check: $PRIVATE_API_STATUS"
-
-if [ "$PRIVATE_API_STATUS" -eq 200 ]; then
-  print_success "Private API is healthy and accessible."
-else
-  print_warning "Private API health check failed with status code $PRIVATE_API_STATUS."
-  print_warning "Please verify your private API setup."
-  exit 1
-fi
-echo "-------------------------------------------------------------"
-echo
-
-# ------------------------------------------------------------
-# Step 11: Create Details File
-# ------------------------------------------------------------
-print_header "Step 11: Creating Details File"
-echo "Description: Creating a file with public URL, private URL, sharing service token, and HMAC token."
-echo "-------------------------------------------------------------"
-
-DETAILS_FILE="$ONPREM_BASE_DIR/onprem_details.txt"
-PRIVATE_URL="https://${PUBLIC_IP}:8080"
-
-cat > "$DETAILS_FILE" <<EOF
-Public URL: https://${ONPREM_DOMAIN}
-Private URL: ${PRIVATE_URL}
-Sharing Service Token: ${SHARING_TOKEN}
-HMAC Secret: ${HMAC_SECRET}
-EOF
-
-print_success "Details file created at $DETAILS_FILE."
-echo "-------------------------------------------------------------"
-echo
-
-# ------------------------------------------------------------
-# Footer
-# ------------------------------------------------------------
-print_header "On-Prem Sharing Service Setup Completed Successfully"
-echo "Your On-Prem Sharing Service is now up and running."
-echo "=============================================="
-
-  
-  print_success "Full setup completed."
-}
-
-# ------------------------------------------------------------
-# Verify Function: Health Checks Only
-# ------------------------------------------------------------
-verify_onprem() {
-  echo "============================================================="
-  echo "             On-Prem Sharing Service Verification"
-  echo "This mode will verify the health of both public and private"
-  echo "APIs of your On-Prem Sharing Service deployment."
-  echo "============================================================="
-  echo
-
-  echo "-------------------------------------------------------------"
-  echo "Step 1: Collecting Verification Details"
-  echo "Description: Prompting for domain and public IP for health checks."
-  echo "-------------------------------------------------------------"
-
-  read -p "Enter the domain of the On-Prem Service: " ONPREM_DOMAIN
-  read -p "Enter the public IP address of the VM for private API access: " PUBLIC_IP
-
-  echo "Domain: $ONPREM_DOMAIN"
-  echo "Public IP: $PUBLIC_IP"
-  echo "-------------------------------------------------------------"
-  echo
-
-  echo "-------------------------------------------------------------"
-  echo "Step 2: Public API Health Check"
-  echo "Description: Verifying that the public API is running and healthy."
-  echo "-------------------------------------------------------------"
-
-  PUBLIC_HEALTH_URL="https://${ONPREM_DOMAIN}/health"
-  PUBLIC_HTTP_STATUS=$(curl -ks -o /dev/null -w "%{http_code}" "$PUBLIC_HEALTH_URL" || echo "Failed")
-
-  echo "HTTP Status Code from public API health check: $PUBLIC_HTTP_STATUS"
-
-  if [ "$PUBLIC_HTTP_STATUS" -eq 200 ]; then
-    echo "Public API is healthy and running at https://${ONPREM_DOMAIN}"
-  else
-    echo "Public API health check failed with status code $PUBLIC_HTTP_STATUS."
-    exit 1
-  fi
-  echo "-------------------------------------------------------------"
-  echo
-
-  echo "-------------------------------------------------------------"
-  echo "Step 3: Private API Health Check"
-  echo "Description: Verifying that the private API is running and healthy using mTLS."
-  echo "-------------------------------------------------------------"
-
-  CLIENT_CERT="./onpremsharing/certs/mtls/server.crt"
-  CLIENT_KEY="./onpremsharing/certs/mtls/server.key"
-
-  PRIVATE_API_URL="https://${PUBLIC_IP}:8080/health"
-  PRIVATE_API_STATUS=$(curl -k \
-    --cert "$CLIENT_CERT" \
-    --key "$CLIENT_KEY" \
-    -H "d-user-id: test@example.com" \
-    -H "d-agent-id: test-agent-001" \
-    -H "d-org-id: test-org-001" \
-    -o /dev/null \
-    -w "%{http_code}" \
-    "$PRIVATE_API_URL" || echo "Failed")
-
-  echo "HTTP Status Code from private API health check: $PRIVATE_API_STATUS"
-
-  if [ "$PRIVATE_API_STATUS" -eq 200 ]; then
-    echo "Private API is healthy and accessible at ${PRIVATE_API_URL}."
-  else
-    echo "Private API health check failed with status code $PRIVATE_API_STATUS."
-    exit 1
-  fi
-  echo "-------------------------------------------------------------"
-  echo
-
-  echo "============================================================="
-  echo "        Verification Completed"
-  echo "Please review the above results for API health status."
-  echo "============================================================="
-}
-
-# ------------------------------------------------------------
-# Extract Credentials Function
-# ------------------------------------------------------------
-extract_credentials() {
-  echo "============================================================="
-  echo "                Extracting Credentials"
-  echo "============================================================="
-
-  DETAILS_FILE="./onpremsharing/onprem_details.txt"
-  
-  if [ -f "$DETAILS_FILE" ]; then
-      echo "Credentials found:"
-      cat "$DETAILS_FILE"
-  else
-      echo "No credentials details found at $DETAILS_FILE."
-  fi
-  
-  echo "============================================================="
-}
-
-# ------------------------------------------------------------
-# Create Credentials File Function
-# ------------------------------------------------------------
-create_credentials_file() {
-  echo "============================================================="
-  echo "           Create Credentials File"
-  echo "This option will extract details from config.yaml and prompt"
-  echo "for any missing information to create the credentials file."
-  echo "============================================================="
-  echo
-
-  # Determine base directory
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  ONPREM_BASE_DIR="$SCRIPT_DIR/onpremsharing"
-  CONFIG_FILE="$ONPREM_BASE_DIR/config.yaml"
-
-  # Extract details from config.yaml
-  HOST_URL=$(grep '^host_url:' "$CONFIG_FILE" | awk '{print $2}' | tr -d '"')
-  ONPREM_DOMAIN=${HOST_URL#https://}
-  SHARING_SERVICE_TOKEN=$(grep '^sharing_service_token:' "$CONFIG_FILE" | awk '{print $2}' | tr -d '"')
-  HMAC_SECRET=$(grep '^hmac_secret:' "$CONFIG_FILE" | awk '{print $2}' | tr -d '"')
-
-  echo "Extracted Domain: $ONPREM_DOMAIN"
-  echo "Extracted Sharing Service Token: $SHARING_SERVICE_TOKEN"
-  echo "Extracted HMAC Secret: [HIDDEN for security]"
-  
-  read -p "Enter the public IP address of the VM for private API access: " PUBLIC_IP
-
-  DETAILS_FILE="$ONPREM_BASE_DIR/onprem_details.txt"
-  PRIVATE_URL="https://${PUBLIC_IP}:8080"
-
-  cat > "$DETAILS_FILE" <<EOF
-Public URL: ${HOST_URL}
-Private URL: ${PRIVATE_URL}
-Sharing Service Token: ${SHARING_SERVICE_TOKEN}
-HMAC Secret: ${HMAC_SECRET}
-EOF
-
-  echo "Credentials file created at $DETAILS_FILE."
-  echo "============================================================="
-  echo
-}
-
-# ------------------------------------------------------------
-# Setup Certificate Renewal Function
-# ------------------------------------------------------------
-setup_cert_renewal() {
-  echo "============================================================="
-  echo "         OnPrem Certificate Renewal Automation Setup"
-  echo "This option will configure automatic certificate renewal"
-  echo "for your existing Let's Encrypt certificates."
-  echo "============================================================="
-  echo
-
-  # Ask directly for domain name
-  read -p "Enter the domain for OnPrem Service: " ONPREM_DOMAIN
-  
-  # Final check for domain
-  if [ -z "$ONPREM_DOMAIN" ]; then
-    error_exit "Domain cannot be empty"
-  fi
-  
-  # Check if certificate exists
-  CERT_PATH="/etc/letsencrypt/live/${ONPREM_DOMAIN}"
-  if [ ! -d "$CERT_PATH" ]; then
-    echo "Certificate for ${ONPREM_DOMAIN} not found at $CERT_PATH"
-    read -p "Would you like to create a new certificate for ${ONPREM_DOMAIN}? (Y/n): " CREATE_CERT
+    # Create extraction directory
+    rm -rf "$EXTRACT_DIR"
+    mkdir -p "$EXTRACT_DIR"
     
-    if [[ ! "$CREATE_CERT" =~ ^[Nn]$ ]]; then
-      # Check if certbot is installed
-      if ! command -v certbot >/dev/null; then
-        echo "Certbot not found. Installing certbot..."
-        sudo apt-get update && sudo apt-get install -y certbot || error_exit "Failed to install Certbot."
-      fi
-      
-      # Get SSL certificate path
-      SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-      ONPREM_BASE_DIR="$SCRIPT_DIR/onpremsharing"
-      SSL_CERTS_DIR="$ONPREM_BASE_DIR/certs/ssl"
-      
-      if [ ! -d "$SSL_CERTS_DIR" ]; then
-        echo "Creating SSL certificates directory..."
-        mkdir -p "$SSL_CERTS_DIR" || error_exit "Failed to create SSL certificates directory."
-      fi
-      
-      # Obtain certificate
-      echo "Obtaining certificate for ${ONPREM_DOMAIN} using standalone mode."
-      sudo certbot certonly --non-interactive --agree-tos --standalone -d "${ONPREM_DOMAIN}" --register-unsafely-without-email || error_exit "Certbot failed to obtain certificate."
-      
-      if sudo test -f "${CERT_PATH}/privkey.pem" && sudo test -f "${CERT_PATH}/fullchain.pem"; then
-        echo "Certificate obtained successfully."
-      else
-        error_exit "Failed to obtain certificate for ${ONPREM_DOMAIN}. Exiting."
-      fi
-    else
-      error_exit "Cannot proceed without a valid certificate."
-    fi
-  else
-    echo "Certificate found for ${ONPREM_DOMAIN}"
-  fi
-  
-  # Get SSL certificate path in OnPrem service
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  ONPREM_BASE_DIR="$SCRIPT_DIR/onpremsharing"
-  SSL_CERTS_DIR="$ONPREM_BASE_DIR/certs/ssl"
-  
-  if [ ! -d "$SSL_CERTS_DIR" ]; then
-    echo "Creating SSL certificates directory..."
-    mkdir -p "$SSL_CERTS_DIR" || error_exit "Failed to create SSL certificates directory."
-  fi
-  
-  # Copy current certificates to OnPrem service location
-  echo "Copying current certificates to OnPrem service location..."
-  sudo cp "${CERT_PATH}/privkey.pem" "$SSL_CERTS_DIR/server.key" || error_exit "Failed to copy private key."
-  sudo cp "${CERT_PATH}/fullchain.pem" "$SSL_CERTS_DIR/server.crt" || error_exit "Failed to copy public certificate."
-  
-  # Configure certificate renewal using the shared function
-  configure_cert_renewal "$ONPREM_DOMAIN" "$CERT_PATH" "$SSL_CERTS_DIR" "$ONPREM_BASE_DIR"
-  
-  # Run validation script if available
-  if [ -f "$SCRIPT_DIR/validate_onprem_renewal.sh" ]; then
-    echo "Validation script found. You can verify your setup with:"
-    echo "sudo $SCRIPT_DIR/validate_onprem_renewal.sh"
-  fi
-  
-  echo "============================================================="
-  echo "Certificate renewal automation setup completed successfully."
-  echo "============================================================="
+    # Find the line where the payload starts
+    PAYLOAD_LINE=$(awk '/^__PAYLOAD_START__/ {print NR + 1; exit 0; }' "$0")
+    
+    # Extract the payload
+    tail -n +$PAYLOAD_LINE "$0" | base64 -d | tar -xzf - -C "$EXTRACT_DIR"
+    
+    print_success "Files extracted to: $EXTRACT_DIR"
 }
 
-# ------------------------------------------------------------
-# Main Menu: Choose Mode
-# ------------------------------------------------------------
-echo "============================================================="
-echo "  On-Prem Sharing Service - Choose an Option"
-echo "1) Full Setup"
-echo "2) Verify Deployment"
-echo "3) Extract Credentials"
-echo "4) Create Credentials File"
-echo "5) Setup Certificate Renewal"
-echo "============================================================="
-read -p "Enter your choice (1, 2, 3, 4, or 5): " choice
+# Function to run verification/credentials without extraction
+run_verification_direct() {
+    print_info "Running verification/credentials mode..."
+    
+    # Check if onpremsharing directory exists in current location
+    if [ -d "$ORIGINAL_DIR/onpremsharing" ]; then
+        print_info "Found existing OnPrem deployment at $ORIGINAL_DIR/onpremsharing"
+        
+        # Extract files temporarily for verification
+        extract_files
+        chmod +x "$EXTRACT_DIR/setup_onprem_new.sh"
+        
+        # Run verification from original directory
+        cd "$ORIGINAL_DIR"
+        ONPREM_INSTALL_DIR="$ORIGINAL_DIR" "$EXTRACT_DIR/setup_onprem_new.sh" "$@"
+        
+        # Clean up after verification
+        cleanup --cleanup
+    else
+        print_error "No existing OnPrem deployment found at $ORIGINAL_DIR/onpremsharing"
+        print_info "Please run full setup first:"
+        print_info "  sudo $0 <JWT_TOKEN>"
+        exit 1
+    fi
+}
 
-case "$choice" in
-  1) setup_onprem ;;
-  2) verify_onprem ;;
-  3) extract_credentials ;;
-  4) create_credentials_file ;;
-  5) setup_cert_renewal ;;
-  *) echo "Invalid choice. Exiting." ; exit 1 ;;
-esac
+# Function to run the setup
+run_setup() {
+    print_info "Starting Fenixpyre Onprem Secure Sharing Service setup..."
+    
+    # Make setup script executable
+    chmod +x "$EXTRACT_DIR/setup_onprem_new.sh"
+    
+    # Run setup from original directory so onpremsharing folder is created there
+    cd "$ORIGINAL_DIR"
+    
+    # Check if arguments were passed to the installer
+    if [ $# -eq 0 ]; then
+        print_info "No arguments provided. Showing usage..."
+        ONPREM_INSTALL_DIR="$ORIGINAL_DIR" "$EXTRACT_DIR/setup_onprem_new.sh" --help
+    else
+        print_info "Running setup with provided arguments..."
+        ONPREM_INSTALL_DIR="$ORIGINAL_DIR" "$EXTRACT_DIR/setup_onprem_new.sh" "$@"
+    fi
+}
+
+# Function to cleanup extracted files (optional)
+cleanup() {
+    if [ "$1" = "--cleanup" ]; then
+        print_info "Cleaning up extracted files..."
+        rm -rf "$EXTRACT_DIR"
+        print_success "Cleanup completed"
+    fi
+}
+
+# Function to show installer help
+show_installer_help() {
+    cat << 'HELP_EOF'
+Fenixpyre Onprem Secure Sharing Service - Self-Extracting Installer
+
+Usage: ./onprem-sharing-setup_YYYYMMDD_HHMMSS.sh [OPTIONS] [JWT_TOKEN]
+
+Installer Options:
+  --help                   Show this installer help
+  --extract-only           Extract files without running setup
+  --cleanup                Remove extracted files
+  
+Setup Options (passed through to setup script):
+  -h, --help               Show setup script help
+  -v, --verify             Verify existing deployment
+  -c, --credentials        Extract credentials from existing setup
+  -i, --integrate          Register integration with FenixPyre platform
+  -e, --endpoint URL       FenixPyre API endpoint
+      --letsencrypt        Use Let's Encrypt for TLS certificates
+      --manual-tls         Use manual TLS certificate placement
+
+Examples:
+  # Extract and show setup help
+  ./onprem-sharing-setup_YYYYMMDD_HHMMSS.sh --help
+  
+  # Extract and run full setup
+  sudo ./onprem-sharing-setup_YYYYMMDD_HHMMSS.sh eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+  
+  # Extract only (for manual inspection)
+  ./onprem-sharing-setup_YYYYMMDD_HHMMSS.sh --extract-only
+  
+  # Verify existing deployment
+  sudo ./onprem-sharing-setup_YYYYMMDD_HHMMSS.sh --verify
+  
+  # Register integration only
+  sudo ./onprem-sharing-setup_YYYYMMDD_HHMMSS.sh --integrate eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+  
+  # Cleanup extracted files
+  ./onprem-sharing-setup_YYYYMMDD_HHMMSS.sh --cleanup
+
+HELP_EOF
+}
+
+# Main installer logic
+main() {
+    case "${1:-}" in
+        --help)
+            show_installer_help
+            exit 0
+            ;;
+        --extract-only)
+            extract_files
+            print_success "Files extracted. You can now run setup manually:"
+            print_info "ONPREM_INSTALL_DIR=\"$(pwd)\" sudo $EXTRACT_DIR/setup_onprem_new.sh --help"
+            exit 0
+            ;;
+        --cleanup)
+            cleanup --cleanup
+            exit 0
+            ;;
+        --verify|--credentials)
+            # These modes work with existing files, no extraction needed
+            run_verification_direct "$@"
+            ;;
+        *)
+            extract_files
+            run_setup "$@"
+            cleanup
+            ;;
+    esac
+}
+
+# Run main function with all arguments
+main "$@"
+
+# Exit before payload
+exit 0
+
+__PAYLOAD_START__
+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AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
