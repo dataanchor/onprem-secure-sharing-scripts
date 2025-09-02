@@ -41,44 +41,39 @@ print_warning() {
 check_docker_installation() {
   print_header "Checking Docker Installation"
   
-  # Check if Docker or Docker Compose is not installed
-  if ! command -v docker &> /dev/null || ! command -v docker-compose &> /dev/null; then
-    print_warning "Docker or Docker Compose is not installed."
-    read -p "Would you like to install Docker and Docker Compose? (y/N): " INSTALL_DOCKER
+  # Check if Docker is not installed
+  if ! command -v docker &> /dev/null; then
+    print_warning "Docker is not installed. Installing automatically..."
     
-    if [[ "$INSTALL_DOCKER" =~ ^[Yy]$ ]]; then
-      print_info "Installing Docker and Docker Compose..."
-      
-      # Remove old versions if they exist
-      sudo apt-get remove docker docker-engine docker.io containerd runc || true
-      
-      # Update package index
-      sudo apt-get update
-      
-      # Install prerequisites
-      sudo apt-get install -y \
-          apt-transport-https \
-          ca-certificates \
-          curl \
-          gnupg \
-          lsb-release
-      
-      # Add Docker's official GPG key
-      curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-      
-      # Set up the stable repository
-      echo \
-        "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu \
-        $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-      
-      # Install Docker Engine and Docker Compose
-      sudo apt-get update
-      sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose
-      
-      print_success "Docker and Docker Compose installed successfully."
-    else
-      error_exit "Docker and Docker Compose are required to run this script. Please install them and try again."
-    fi
+    print_info "Installing Docker and Docker Compose..."
+    
+    # Remove old versions if they exist
+    sudo apt-get remove docker docker-engine docker.io containerd runc || true
+    
+    # Update package index
+    sudo apt-get update
+    
+    # Install prerequisites
+    sudo apt-get install -y \
+        apt-transport-https \
+        ca-certificates \
+        curl \
+        gnupg \
+        lsb-release
+    
+    # Add Docker's official GPG key
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+    
+    # Set up the stable repository
+    echo \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu \
+      $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+    
+    # Install Docker Engine (includes docker compose)
+    sudo apt-get update
+    sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+    
+    print_success "Docker and Docker Compose installed successfully."
   else
     print_success "Docker and Docker Compose are installed."
   fi
@@ -103,6 +98,12 @@ configure_cert_renewal() {
   
   print_header "Configuring Certificate Renewal"
   
+  # Ensure crontab is installed
+  if ! command -v crontab >/dev/null; then
+    print_warning "crontab is not installed. Installing..."
+    sudo apt-get update && sudo apt-get install -y cron || error_exit "Failed to install crontab (cron package)."
+    print_success "crontab (cron) installed successfully."
+  fi
   # Create the deploy hook script in the service directory
   SCRIPTS_DIR="$base_dir/scripts"
   mkdir -p "$SCRIPTS_DIR"
@@ -274,7 +275,7 @@ setup_minio() {
   echo "Description: Obtaining or using existing TLS certificates via Let's Encrypt."
   echo "-------------------------------------------------------------"
 
-  read -p "Do you want to create a TLS certificate for ${MINIO_DOMAIN} using Let's Encrypt? (y/N): " CREATE_CERT
+  read -p "Do you want to create a TLS certificate for ${MINIO_DOMAIN} using Let's Encrypt? (Y/n): " CREATE_CERT
 
   if [[ "$CREATE_CERT" =~ ^[Yy]$ ]]; then
     CERT_PATH="/etc/letsencrypt/live/${MINIO_DOMAIN}"
@@ -327,7 +328,7 @@ setup_minio() {
 services:
   minio:
     container_name: minio
-    image: minio/minio:RELEASE.2025-05-24T17-08-30Z
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z.fips
     command: server /data
     environment:
       MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
@@ -392,6 +393,13 @@ EOF
 
   # Add lifecycle rule after MinIO is running
   echo "Setting up lifecycle rule for domain ${MINIO_DOMAIN} with root user ${MINIO_ROOT_USER}..."
+  
+  # Install mc client in the container if it doesn't exist
+  if ! docker exec minio which mc &>/dev/null; then
+    echo "Installing MinIO Client (mc) in the container..."
+    docker exec minio sh -c "curl -L -o /tmp/mc https://dl.min.io/client/mc/release/linux-amd64/mc && chmod +x /tmp/mc && mv /tmp/mc /usr/bin/mc"
+  fi
+  
   docker exec minio mc alias set local https://${MINIO_DOMAIN} "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" --insecure
   
   # Create the specified bucket if it doesn't exist
@@ -403,12 +411,14 @@ EOF
     echo "Bucket '${BUCKET_NAME}' already exists."
   fi
   
-  # Add lifecycle rule to the bucket with /downloads prefix
-  echo "Adding lifecycle rule to bucket for /downloads prefix..."
+  # Add lifecycle rule to the bucket with /downloads and /tmp-files prefixes
+  echo "Adding lifecycle rule to bucket for /downloads and /tmp-files prefixes..."
   docker exec minio mc ilm add local/${BUCKET_NAME} --expire-days 1 --prefix "downloads" --insecure
   docker exec minio mc ilm add local/${BUCKET_NAME} --expire-days 1 --prefix "/downloads" --insecure
+  docker exec minio mc ilm add local/${BUCKET_NAME} --expire-days 1 --prefix "tmp-files" --insecure
+  docker exec minio mc ilm add local/${BUCKET_NAME} --expire-days 1 --prefix "/tmp-files" --insecure
 
-  echo "MinIO setup completed with lifecycle rule configured for '${BUCKET_NAME}/downloads' prefix."
+  echo "MinIO setup completed with lifecycle rules configured for '${BUCKET_NAME}/downloads' and '${BUCKET_NAME}/tmp-files' prefixes."
 }
 
 # Setup certificate renewal function
