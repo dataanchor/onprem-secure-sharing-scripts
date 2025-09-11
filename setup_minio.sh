@@ -233,10 +233,10 @@ setup_minio() {
   done
 
   while true; do
-    read -sp "Enter MinIO root password (min 8 characters): " MINIO_ROOT_PASSWORD
+    read -sp "Enter MinIO root password (min 14 characters for FIPS compliance): " MINIO_ROOT_PASSWORD
     echo
-    if [ ${#MINIO_ROOT_PASSWORD} -lt 8 ]; then
-      echo "Password must be at least 8 characters. Please try again."
+    if [ ${#MINIO_ROOT_PASSWORD} -lt 14 ]; then
+      echo "Password must be at least 14 characters for FIPS compliance. Please try again."
       continue
     fi
     read -sp "Confirm MinIO root password: " MINIO_ROOT_PASSWORD_CONFIRM
