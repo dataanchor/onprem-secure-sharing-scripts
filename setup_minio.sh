@@ -88,15 +88,15 @@ fi
 # Check Docker installation before proceeding
 check_docker_installation
 
-# Configure Certificate Renewal Function
-# This is a reusable function for both full setup and standalone renewal
-configure_cert_renewal() {
+# Configure Certificate Update Function
+# This creates a weekly update script that checks and updates certificates
+configure_cert_update() {
   local domain=$1
   local cert_path=$2
   local certs_dir=$3
   local base_dir=$4
   
-  print_header "Configuring Certificate Renewal"
+  print_header "Configuring Certificate Update Script"
   
   # Ensure crontab is installed
   if ! command -v crontab >/dev/null; then
@@ -104,58 +104,184 @@ configure_cert_renewal() {
     sudo apt-get update && sudo apt-get install -y cron || error_exit "Failed to install crontab (cron package)."
     print_success "crontab (cron) installed successfully."
   fi
-  # Create the deploy hook script in the service directory
+  
+  # Create the scripts directory
   SCRIPTS_DIR="$base_dir/scripts"
   mkdir -p "$SCRIPTS_DIR"
-  DEPLOY_HOOK_SCRIPT="$SCRIPTS_DIR/cert-deploy-hook.sh"
+  UPDATE_SCRIPT="$SCRIPTS_DIR/cert-update.sh"
+  LOG_FILE="$base_dir/certificate-update.log"
   
-  # Create the deploy hook script
-  sudo tee "$DEPLOY_HOOK_SCRIPT" > /dev/null << EOF
+  # Create the certificate update script
+  sudo tee "$UPDATE_SCRIPT" > /dev/null << EOF
 #!/bin/bash
-# Let's Encrypt certificate renewal deploy hook for MinIO Service
+# Certificate Update Script for MinIO Service
+# Runs every Saturday at 3:00 AM to check and update certificates
 
-# Check if this renewal is for our domain
-if [[ "\$RENEWED_DOMAINS" == *"${domain}"* ]]; then
-  # Copy the renewed certificates to the service location
-  cp "\$RENEWED_LINEAGE/privkey.pem" "$certs_dir/private.key"
-  cp "\$RENEWED_LINEAGE/fullchain.pem" "$certs_dir/public.crt"
-  
-  # Restart the container to apply new certificates
-  cd "$base_dir" && docker compose restart minio
-  
-  # Log the renewal
-  echo "\$(date): Renewed certificates for ${domain} and restarted MinIO service" >> "$base_dir/certificate-renewal.log"
+set -e
+
+# Configuration
+DOMAIN="${domain}"
+LETSENCRYPT_CERT_PATH="${cert_path}"
+SERVICE_CERTS_DIR="${certs_dir}"
+SERVICE_BASE_DIR="${base_dir}"
+LOG_FILE="${LOG_FILE}"
+
+# Function to log with timestamp
+log_message() {
+    echo "\$(date '+%Y-%m-%d %H:%M:%S') - \$1" >> "\$LOG_FILE"
+}
+
+# Function to add log divider
+add_log_divider() {
+    echo "========================================================" >> "\$LOG_FILE"
+    echo "Certificate Update Check - \$(date '+%Y-%m-%d %H:%M:%S')" >> "\$LOG_FILE"
+    echo "========================================================" >> "\$LOG_FILE"
+}
+
+# Function to get certificate expiry date
+get_cert_expiry() {
+    local cert_file="\$1"
+    if [ -f "\$cert_file" ]; then
+        openssl x509 -in "\$cert_file" -noout -enddate | cut -d= -f2
+    else
+        echo "Certificate file not found"
+    fi
+}
+
+# Function to check if certificates are different
+certificates_different() {
+    local le_priv="\$LETSENCRYPT_CERT_PATH/privkey.pem"
+    local le_cert="\$LETSENCRYPT_CERT_PATH/fullchain.pem"
+    local svc_priv="\$SERVICE_CERTS_DIR/private.key"
+    local svc_cert="\$SERVICE_CERTS_DIR/public.crt"
+    
+    if [ ! -f "\$le_priv" ] || [ ! -f "\$le_cert" ]; then
+        log_message "ERROR: Let's Encrypt certificates not found at \$LETSENCRYPT_CERT_PATH"
+        return 1
+    fi
+    
+    if [ ! -f "\$svc_priv" ] || [ ! -f "\$svc_cert" ]; then
+        log_message "INFO: Service certificates not found, will copy from Let's Encrypt"
+        return 0
+    fi
+    
+    # Compare file checksums
+    if ! cmp -s "\$le_priv" "\$svc_priv" || ! cmp -s "\$le_cert" "\$svc_cert"; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Main execution
+add_log_divider
+
+log_message "Starting certificate update check for domain: \$DOMAIN"
+
+# Check if Let's Encrypt certificate exists
+if [ ! -d "\$LETSENCRYPT_CERT_PATH" ]; then
+    log_message "ERROR: Let's Encrypt certificate directory not found: \$LETSENCRYPT_CERT_PATH"
+    exit 1
 fi
+
+# Get expiry information for both certificates
+LE_CERT_FILE="\$LETSENCRYPT_CERT_PATH/fullchain.pem"
+SVC_CERT_FILE="\$SERVICE_CERTS_DIR/public.crt"
+
+if [ -f "\$LE_CERT_FILE" ]; then
+    LE_EXPIRY=\$(get_cert_expiry "\$LE_CERT_FILE")
+    log_message "Let's Encrypt certificate expires: \$LE_EXPIRY"
+else
+    log_message "ERROR: Let's Encrypt certificate file not found: \$LE_CERT_FILE"
+    exit 1
+fi
+
+if [ -f "\$SVC_CERT_FILE" ]; then
+    SVC_EXPIRY=\$(get_cert_expiry "\$SVC_CERT_FILE")
+    log_message "Service certificate expires: \$SVC_EXPIRY"
+else
+    log_message "INFO: Service certificate not found, will be created"
+fi
+
+# Check if certificates need updating
+if certificates_different; then
+    log_message "INFO: Certificates are different, updating service certificates..."
+    
+    # Create service certs directory if it doesn't exist
+    mkdir -p "\$SERVICE_CERTS_DIR"
+    
+    # Copy certificates
+    cp "\$LETSENCRYPT_CERT_PATH/privkey.pem" "\$SERVICE_CERTS_DIR/private.key"
+    cp "\$LETSENCRYPT_CERT_PATH/fullchain.pem" "\$SERVICE_CERTS_DIR/public.crt"
+    
+    # Set proper permissions
+    chmod 644 "\$SERVICE_CERTS_DIR/private.key"
+    chmod 644 "\$SERVICE_CERTS_DIR/public.crt"
+    
+    log_message "SUCCESS: Certificates copied successfully"
+    
+    # Restart MinIO service
+    log_message "INFO: Restarting MinIO service to apply new certificates..."
+    cd "\$SERVICE_BASE_DIR"
+    
+    if docker compose restart minio; then
+        log_message "SUCCESS: MinIO service restarted successfully"
+        
+        # Wait a moment and check if service is healthy
+        sleep 10
+        if docker compose ps minio | grep -q "Up"; then
+            log_message "SUCCESS: MinIO service is running after restart"
+        else
+            log_message "WARNING: MinIO service may not be running properly after restart"
+        fi
+    else
+        log_message "ERROR: Failed to restart MinIO service"
+        exit 1
+    fi
+else
+    log_message "INFO: Certificates are up to date, no action needed"
+fi
+
+# Get final expiry information
+if [ -f "\$SVC_CERT_FILE" ]; then
+    FINAL_EXPIRY=\$(get_cert_expiry "\$SVC_CERT_FILE")
+    log_message "Final service certificate expires: \$FINAL_EXPIRY"
+fi
+
+log_message "Certificate update check completed"
+echo "" >> "\$LOG_FILE"
 EOF
   
-  # Make the deploy hook executable
-  sudo chmod +x "$DEPLOY_HOOK_SCRIPT"
+  # Make the update script executable
+  sudo chmod +x "$UPDATE_SCRIPT"
   
-  # Set up a daily cron job to attempt renewal with deploy hook
-  CRON_JOB="0 3 * * * sudo /usr/bin/certbot renew --cert-name ${domain} --deploy-hook $DEPLOY_HOOK_SCRIPT --quiet"
+  # Set up a weekly cron job (every Saturday at 2:00 AM)
+  CRON_JOB="0 2 * * 6 $UPDATE_SCRIPT"
   
   # Check if the cron job already exists before adding it
-  if sudo crontab -l 2>/dev/null | grep -q "${domain}"; then
+  if sudo crontab -l 2>/dev/null | grep -q "$UPDATE_SCRIPT"; then
     # Remove old cron job
-    sudo crontab -l 2>/dev/null | grep -v "${domain}" | sudo crontab -
-    print_warning "Replaced existing cron job for ${domain}"
+    sudo crontab -l 2>/dev/null | grep -v "$UPDATE_SCRIPT" | sudo crontab -
+    print_warning "Replaced existing cron job for certificate update"
   fi
   
   # Add the new cron job
   (sudo crontab -l 2>/dev/null; echo "$CRON_JOB") | sudo crontab -
-  print_success "Added daily renewal cron job for ${domain} running at 3:00 AM."
+  print_success "Added weekly certificate update cron job for ${domain} running every Saturday at 2:00 AM."
   
-  print_info "Certificate renewal has been configured:"
-  echo "- Deploy hook: $DEPLOY_HOOK_SCRIPT"
-  echo "- Daily renewal check at 3:00 AM with deploy hook directly specified"
-  echo "- Log file: $base_dir/certificate-renewal.log"
+  print_info "Certificate update has been configured:"
+  echo "- Update script: $UPDATE_SCRIPT"
+  echo "- Weekly update check every Saturday at 3:00 AM"
+  echo "- Log file: $LOG_FILE"
+  echo "- Let's Encrypt path: $cert_path"
+  echo "- Service certificates path: $certs_dir"
 }
 
 # Main menu
 show_menu() {
   print_header "MinIO Distributed Setup"
   echo "1) Setup MinIO"
-  echo "2) Setup Certificate Renewal"
+  echo "2) Setup Certificate Update"
   echo "3) Exit"
   echo "=============================================="
   read -p "Enter your choice (1-3): " CHOICE
@@ -165,7 +291,7 @@ show_menu() {
       setup_minio
       ;;
     2)
-      setup_cert_renewal
+      setup_cert_update
       ;;
     3)
       echo "Exiting..."
@@ -295,8 +421,8 @@ setup_minio() {
         sudo cp "${CERT_PATH}/fullchain.pem" "$CERTS_DIR/public.crt" || error_exit "Failed to copy public certificate."
         echo "Certificate obtained and placed in $CERTS_DIR."
         
-        # Configure certificate renewal using the shared function
-        configure_cert_renewal "$MINIO_DOMAIN" "$CERT_PATH" "$CERTS_DIR" "$MINIO_BASE_DIR"
+        # Configure certificate update using the shared function
+        configure_cert_update "$MINIO_DOMAIN" "$CERT_PATH" "$CERTS_DIR" "$MINIO_BASE_DIR"
         
       else
         error_exit "Failed to obtain certificate for ${MINIO_DOMAIN}. Exiting."
@@ -421,11 +547,11 @@ EOF
   echo "MinIO setup completed with lifecycle rules configured for '${BUCKET_NAME}/downloads' and '${BUCKET_NAME}/tmp-files' prefixes."
 }
 
-# Setup certificate renewal function
-setup_cert_renewal() {
+# Setup certificate update function
+setup_cert_update() {
   echo "============================================================="
-  echo "         MinIO Certificate Renewal Automation Setup"
-  echo "This option will configure automatic certificate renewal"
+  echo "         MinIO Certificate Update Automation Setup"
+  echo "This option will configure automatic certificate updates"
   echo "for your existing Let's Encrypt certificates."
   echo "============================================================="
   echo
@@ -492,8 +618,8 @@ setup_cert_renewal() {
   sudo cp "${CERT_PATH}/privkey.pem" "$CERTS_DIR/private.key" || error_exit "Failed to copy private key."
   sudo cp "${CERT_PATH}/fullchain.pem" "$CERTS_DIR/public.crt" || error_exit "Failed to copy public certificate."
   
-  # Configure certificate renewal using the shared function
-  configure_cert_renewal "$MINIO_DOMAIN" "$CERT_PATH" "$CERTS_DIR" "$MINIO_BASE_DIR"
+  # Configure certificate update using the shared function
+  configure_cert_update "$MINIO_DOMAIN" "$CERT_PATH" "$CERTS_DIR" "$MINIO_BASE_DIR"
   
   # Run validation script if available
   if [ -f "$SCRIPT_DIR/validate_minio_renewal.sh" ]; then
@@ -502,7 +628,7 @@ setup_cert_renewal() {
   fi
   
   echo "============================================================="
-  echo "Certificate renewal automation setup completed successfully."
+  echo "Certificate update automation setup completed successfully."
   echo "============================================================="
 }
 
