@@ -1,636 +1,195 @@
 #!/bin/bash
+# MinIO Setup - Self-Extracting Installer
+# Generated automatically - Do not edit manually
+
 set -e
 
-# Text formatting
-BOLD='\033[1m'
+# Colors for output
 GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-RED='\033[0;31m'
 BLUE='\033[0;34m'
-CYAN='\033[0;36m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
 NC='\033[0m' # No Color
 
-# Function to display error messages and exit
-error_exit() {
-  echo -e "${RED}Error: $1${NC}" >&2
-  exit 1
-}
-
-# Function to print section header
-print_header() {
-  echo -e "\n${BOLD}$1${NC}"
-  echo "=============================================="
-}
-
-# Function to print success message
-print_success() {
-  echo -e "${GREEN}✓ $1${NC}"
-}
-
-# Function to print info message
 print_info() {
-  echo -e "${BLUE}ℹ $1${NC}"
+    echo -e "${BLUE}ℹ${NC} $1"
 }
 
-# Function to print warning message
+print_success() {
+    echo -e "${GREEN}✓${NC} $1"
+}
+
 print_warning() {
-  echo -e "${YELLOW}⚠ $1${NC}"
+    echo -e "${YELLOW}⚠${NC} $1"
 }
 
-# Function to check and install Docker and Docker Compose
-check_docker_installation() {
-  print_header "Checking Docker Installation"
-  
-  # Check if Docker is not installed
-  if ! command -v docker &> /dev/null; then
-    print_warning "Docker is not installed. Installing automatically..."
-    
-    print_info "Installing Docker and Docker Compose..."
-    
-    # Remove old versions if they exist
-    sudo apt-get remove docker docker-engine docker.io containerd runc || true
-    
-    # Update package index
-    sudo apt-get update
-    
-    # Install prerequisites
-    sudo apt-get install -y \
-        apt-transport-https \
-        ca-certificates \
-        curl \
-        gnupg \
-        lsb-release
-    
-    # Add Docker's official GPG key
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-    
-    # Set up the stable repository
-    echo \
-      "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu \
-      $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-    
-    # Install Docker Engine (includes docker compose)
-    sudo apt-get update
-    sudo apt-get install -y docker-ce docker-ce-cli containerd.io
-    
-    print_success "Docker and Docker Compose installed successfully."
-  else
-    print_success "Docker and Docker Compose are installed."
-  fi
+print_error() {
+    echo -e "${RED}✗${NC} $1"
 }
 
-# Check if script is run as root/sudo
-if [ "$EUID" -ne 0 ]; then
-  echo -e "${RED}Please run this script with sudo${NC}"
-  exit 1
-fi
-
-# Check Docker installation before proceeding
-check_docker_installation
-
-# Configure Certificate Update Function
-# This creates a weekly update script that checks and updates certificates
-configure_cert_update() {
-  local domain=$1
-  local cert_path=$2
-  local certs_dir=$3
-  local base_dir=$4
-  
-  print_header "Configuring Certificate Update Script"
-  
-  # Ensure crontab is installed
-  if ! command -v crontab >/dev/null; then
-    print_warning "crontab is not installed. Installing..."
-    sudo apt-get update && sudo apt-get install -y cron || error_exit "Failed to install crontab (cron package)."
-    print_success "crontab (cron) installed successfully."
-  fi
-  
-  # Create the scripts directory
-  SCRIPTS_DIR="$base_dir/scripts"
-  mkdir -p "$SCRIPTS_DIR"
-  UPDATE_SCRIPT="$SCRIPTS_DIR/cert-update.sh"
-  LOG_FILE="$base_dir/certificate-update.log"
-  
-  # Create the certificate update script
-  sudo tee "$UPDATE_SCRIPT" > /dev/null << EOF
-#!/bin/bash
-# Certificate Update Script for MinIO Service
-# Runs every Saturday at 3:00 AM to check and update certificates
-
-set -e
-
-# Configuration
-DOMAIN="${domain}"
-LETSENCRYPT_CERT_PATH="${cert_path}"
-SERVICE_CERTS_DIR="${certs_dir}"
-SERVICE_BASE_DIR="${base_dir}"
-LOG_FILE="${LOG_FILE}"
-
-# Function to log with timestamp
-log_message() {
-    echo "\$(date '+%Y-%m-%d %H:%M:%S') - \$1" >> "\$LOG_FILE"
+print_header() {
+    echo -e "\n${GREEN}=============================================="
+    echo -e "$1"
+    echo -e "==============================================${NC}\n"
 }
 
-# Function to add log divider
-add_log_divider() {
-    echo "========================================================" >> "\$LOG_FILE"
-    echo "Certificate Update Check - \$(date '+%Y-%m-%d %H:%M:%S')" >> "\$LOG_FILE"
-    echo "========================================================" >> "\$LOG_FILE"
+# Get the current working directory where the script is run  
+ORIGINAL_DIR="$(pwd)"
+EXTRACT_DIR="$ORIGINAL_DIR/minio-setup-scripts"
+
+# Function to extract embedded files
+extract_files() {
+    print_header "MinIO Setup - Self-Extracting Installer"
+    print_info "Extracting installation files..."
+    
+    # Create extraction directory
+    rm -rf "$EXTRACT_DIR"
+    mkdir -p "$EXTRACT_DIR"
+    
+    # Find the line where the payload starts
+    PAYLOAD_LINE=$(awk '/^__PAYLOAD_START__/ {print NR + 1; exit 0; }' "$0")
+    
+    # Extract the payload
+    tail -n +$PAYLOAD_LINE "$0" | base64 -d | tar -xzf - -C "$EXTRACT_DIR"
+    
+    print_success "Files extracted to: $EXTRACT_DIR"
 }
 
-# Function to get certificate expiry date
-get_cert_expiry() {
-    local cert_file="\$1"
-    if [ -f "\$cert_file" ]; then
-        openssl x509 -in "\$cert_file" -noout -enddate | cut -d= -f2
+# Function to run the setup
+run_setup() {
+    print_info "Starting MinIO setup..."
+    
+    # Set up trap to cleanup on exit (success or failure)
+    trap 'cleanup' EXIT
+    
+    # Make setup script executable
+    chmod +x "$EXTRACT_DIR/setup_minio.sh"
+    
+    # Run setup from original directory so minio folder is created there
+    cd "$ORIGINAL_DIR"
+    
+    # Run setup with provided arguments
+    MINIO_INSTALL_DIR="$ORIGINAL_DIR" "$EXTRACT_DIR/setup_minio.sh" "$@"
+}
+
+# Function to cleanup extracted files
+cleanup() {
+    if [ -d "$EXTRACT_DIR" ]; then
+        print_info "Cleaning up extracted files..."
+        rm -rf "$EXTRACT_DIR"
+        print_success "Cleanup completed"
+    fi
+}
+
+# Function for manual cleanup command
+manual_cleanup() {
+    if [ -d "$EXTRACT_DIR" ]; then
+        print_info "Cleaning up extracted files..."
+        rm -rf "$EXTRACT_DIR"
+        print_success "Cleanup completed"
     else
-        echo "Certificate file not found"
+        print_info "No extracted files found to clean up"
     fi
 }
 
-# Function to check if certificates are different
-certificates_different() {
-    local le_priv="\$LETSENCRYPT_CERT_PATH/privkey.pem"
-    local le_cert="\$LETSENCRYPT_CERT_PATH/fullchain.pem"
-    local svc_priv="\$SERVICE_CERTS_DIR/private.key"
-    local svc_cert="\$SERVICE_CERTS_DIR/public.crt"
+# Function to show installer help
+show_installer_help() {
+    cat << 'HELP_EOF'
+MinIO Setup - Self-Extracting Installer
+
+DESCRIPTION:
+    This is a self-extracting installer for MinIO setup with multi-distribution support.
+    It contains all necessary files and dependencies for setting up MinIO on various Linux distributions.
+
+USAGE:
+    sudo ./minio-setup_YYYYMMDD_HHMMSS.sh [INSTALLER_OPTIONS] [SETUP_OPTIONS]
+
+INSTALLER OPTIONS:
+    --help              Show this help message
+    --extract-only      Extract files without running setup
+    --cleanup           Remove extracted files (if any exist)
+
+SETUP OPTIONS (passed to MinIO setup):
+    -v, --verify        Verify existing MinIO deployment (health checks only)
+    --letsencrypt       Use Let's Encrypt for TLS certificates (default)
+    --manual-tls        Use manual TLS certificate placement
+    --cert-renewal      Configure certificate renewal only
+    --configure-buckets Configure buckets and lifecycle rules for existing deployment
+
+
+EXAMPLES:
+    # Show help
+    ./minio-setup_20241219_143022.sh --help
     
-    if [ ! -f "\$le_priv" ] || [ ! -f "\$le_cert" ]; then
-        log_message "ERROR: Let's Encrypt certificates not found at \$LETSENCRYPT_CERT_PATH"
-        return 1
-    fi
+    # Run full MinIO setup with Let's Encrypt (default)
+    sudo ./minio-setup_20241219_143022.sh
     
-    if [ ! -f "\$svc_priv" ] || [ ! -f "\$svc_cert" ]; then
-        log_message "INFO: Service certificates not found, will copy from Let's Encrypt"
-        return 0
-    fi
+    # Run setup with manual TLS certificates
+    sudo ./minio-setup_20241219_143022.sh --manual-tls
     
-    # Compare file checksums
-    if ! cmp -s "\$le_priv" "\$svc_priv" || ! cmp -s "\$le_cert" "\$svc_cert"; then
-        return 0
-    else
-        return 1
-    fi
+    # Verify existing MinIO deployment
+    sudo ./minio-setup_20241219_143022.sh --verify
+    
+    # Configure certificate renewal only
+    sudo ./minio-setup_20241219_143022.sh --cert-renewal
+    
+    # Configure buckets and lifecycle rules for existing deployment
+    sudo ./minio-setup_20241219_143022.sh --configure-buckets
+    
+    # Extract files for inspection
+    ./minio-setup_20241219_143022.sh --extract-only
+    
+    # Run setup manually after extraction
+    sudo minio-setup-scripts/setup_minio.sh --help
+
+REQUIREMENTS:
+    • Supported Linux distribution
+    • sudo/root privileges
+    • Internet connectivity
+    • Minimum 5GB disk space
+    • Minimum 2GB RAM
+
+WHAT IT DOES:
+    1. Detects your Linux distribution automatically
+    2. Installs Docker using distribution-appropriate methods
+    3. Installs required tools (certbot, cron, etc.)
+    4. Sets up MinIO with TLS certificates (Let's Encrypt or manual)
+    5. Configures automatic certificate renewal
+    6. Creates MinIO buckets with lifecycle rules for automatic cleanup
+    7. Provides comprehensive health checks and verification tools
+
+HELP_EOF
 }
 
-# Main execution
-add_log_divider
-
-log_message "Starting certificate update check for domain: \$DOMAIN"
-
-# Check if Let's Encrypt certificate exists
-if [ ! -d "\$LETSENCRYPT_CERT_PATH" ]; then
-    log_message "ERROR: Let's Encrypt certificate directory not found: \$LETSENCRYPT_CERT_PATH"
-    exit 1
-fi
-
-# Get expiry information for both certificates
-LE_CERT_FILE="\$LETSENCRYPT_CERT_PATH/fullchain.pem"
-SVC_CERT_FILE="\$SERVICE_CERTS_DIR/public.crt"
-
-if [ -f "\$LE_CERT_FILE" ]; then
-    LE_EXPIRY=\$(get_cert_expiry "\$LE_CERT_FILE")
-    log_message "Let's Encrypt certificate expires: \$LE_EXPIRY"
-else
-    log_message "ERROR: Let's Encrypt certificate file not found: \$LE_CERT_FILE"
-    exit 1
-fi
-
-if [ -f "\$SVC_CERT_FILE" ]; then
-    SVC_EXPIRY=\$(get_cert_expiry "\$SVC_CERT_FILE")
-    log_message "Service certificate expires: \$SVC_EXPIRY"
-else
-    log_message "INFO: Service certificate not found, will be created"
-fi
-
-# Check if certificates need updating
-if certificates_different; then
-    log_message "INFO: Certificates are different, updating service certificates..."
-    
-    # Create service certs directory if it doesn't exist
-    mkdir -p "\$SERVICE_CERTS_DIR"
-    
-    # Copy certificates
-    cp "\$LETSENCRYPT_CERT_PATH/privkey.pem" "\$SERVICE_CERTS_DIR/private.key"
-    cp "\$LETSENCRYPT_CERT_PATH/fullchain.pem" "\$SERVICE_CERTS_DIR/public.crt"
-    
-    # Set proper permissions
-    chmod 644 "\$SERVICE_CERTS_DIR/private.key"
-    chmod 644 "\$SERVICE_CERTS_DIR/public.crt"
-    
-    log_message "SUCCESS: Certificates copied successfully"
-    
-    # Restart MinIO service
-    log_message "INFO: Restarting MinIO service to apply new certificates..."
-    cd "\$SERVICE_BASE_DIR"
-    
-    if docker compose restart minio; then
-        log_message "SUCCESS: MinIO service restarted successfully"
-        
-        # Wait a moment and check if service is healthy
-        sleep 10
-        if docker compose ps minio | grep -q "Up"; then
-            log_message "SUCCESS: MinIO service is running after restart"
-        else
-            log_message "WARNING: MinIO service may not be running properly after restart"
-        fi
-    else
-        log_message "ERROR: Failed to restart MinIO service"
-        exit 1
-    fi
-else
-    log_message "INFO: Certificates are up to date, no action needed"
-fi
-
-# Get final expiry information
-if [ -f "\$SVC_CERT_FILE" ]; then
-    FINAL_EXPIRY=\$(get_cert_expiry "\$SVC_CERT_FILE")
-    log_message "Final service certificate expires: \$FINAL_EXPIRY"
-fi
-
-log_message "Certificate update check completed"
-echo "" >> "\$LOG_FILE"
-EOF
-  
-  # Make the update script executable
-  sudo chmod +x "$UPDATE_SCRIPT"
-  
-  # Set up a weekly cron job (every Saturday at 2:00 AM)
-  CRON_JOB="0 2 * * 6 $UPDATE_SCRIPT"
-  
-  # Check if the cron job already exists before adding it
-  if sudo crontab -l 2>/dev/null | grep -q "$UPDATE_SCRIPT"; then
-    # Remove old cron job
-    sudo crontab -l 2>/dev/null | grep -v "$UPDATE_SCRIPT" | sudo crontab -
-    print_warning "Replaced existing cron job for certificate update"
-  fi
-  
-  # Add the new cron job
-  (sudo crontab -l 2>/dev/null; echo "$CRON_JOB") | sudo crontab -
-  print_success "Added weekly certificate update cron job for ${domain} running every Saturday at 2:00 AM."
-  
-  print_info "Certificate update has been configured:"
-  echo "- Update script: $UPDATE_SCRIPT"
-  echo "- Weekly update check every Saturday at 3:00 AM"
-  echo "- Log file: $LOG_FILE"
-  echo "- Let's Encrypt path: $cert_path"
-  echo "- Service certificates path: $certs_dir"
+# Main installer logic
+main() {
+    case "${1:-}" in
+        --help)
+            show_installer_help
+            exit 0
+            ;;
+        --extract-only)
+            extract_files
+            print_success "Files extracted. You can now run setup manually:"
+            print_info "MINIO_INSTALL_DIR=\"$(pwd)\" sudo $EXTRACT_DIR/setup_minio.sh"
+            exit 0
+            ;;
+        --cleanup)
+            manual_cleanup
+            exit 0
+            ;;
+        *)
+            extract_files
+            run_setup "$@"
+            ;;
+    esac
 }
 
-# Main menu
-show_menu() {
-  print_header "MinIO Distributed Setup"
-  echo "1) Setup MinIO"
-  echo "2) Setup Certificate Update"
-  echo "3) Exit"
-  echo "=============================================="
-  read -p "Enter your choice (1-3): " CHOICE
-  
-  case "$CHOICE" in
-    1)
-      setup_minio
-      ;;
-    2)
-      setup_cert_update
-      ;;
-    3)
-      echo "Exiting..."
-      exit 0
-      ;;
-    *)
-      error_exit "Invalid choice"
-      ;;
-  esac
-}
+# Run main function with all arguments
+main "$@"
 
-# Function to setup MinIO
-setup_minio() {
-  # ------------------------------------------------------------
-  # Header
-  # ------------------------------------------------------------
-  echo "============================================================="
-  echo "                MinIO Setup Automation Script"
-  echo "This script will configure and start a MinIO instance with"
-  echo "TLS enabled, using Let's Encrypt for certificates if desired."
-  echo "============================================================="
-  echo
+# Exit before payload
+exit 0
 
-  # ------------------------------------------------------------
-  # Step 1: Environment Setup - Creating Required Directories
-  # ------------------------------------------------------------
-  echo "-------------------------------------------------------------"
-  echo "Step 1: Creating Required Directories"
-  echo "Description: Creating directories for MinIO certificates and data storage."
-  echo "-------------------------------------------------------------"
-  
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  echo "Script is running from: $SCRIPT_DIR"
-
-  MINIO_BASE_DIR="$SCRIPT_DIR/minio"
-  CERTS_DIR="$MINIO_BASE_DIR/certs/minio"
-  DATA_DIR="$MINIO_BASE_DIR/data"
-
-  echo "Creating directories for MinIO setup..."
-  mkdir -p "$CERTS_DIR" || error_exit "Failed to create certificates directory."
-  mkdir -p "$DATA_DIR" || error_exit "Failed to create data directory."
-  echo "Directories created successfully."
-  echo "-------------------------------------------------------------"
-  echo
-
-  # ------------------------------------------------------------
-  # Step 2: Collecting Domain and Credentials
-  # ------------------------------------------------------------
-  echo "-------------------------------------------------------------"
-  echo "Step 2: Collecting Domain, Credentials, and Bucket Name"
-  echo "Description: Prompting for MinIO domain, root user, password, and bucket."
-  echo "-------------------------------------------------------------"
-
-  read -p "Enter the domain for MinIO (default: minio.onpremsharing.example.com): " MINIO_DOMAIN
-  MINIO_DOMAIN=${MINIO_DOMAIN:-minio.onpremsharing.example.com}
-
-  while true; do
-    read -p "Enter MinIO root user [default: minioadmin]: " MINIO_ROOT_USER
-    MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
-    if [ ${#MINIO_ROOT_USER} -ge 3 ]; then
-      break
-    else
-      echo "MINIO_ROOT_USER length should be at least 3 characters."
-    fi
-  done
-
-  while true; do
-    read -sp "Enter MinIO root password (min 14 characters for FIPS compliance): " MINIO_ROOT_PASSWORD
-    echo
-    if [ ${#MINIO_ROOT_PASSWORD} -lt 14 ]; then
-      echo "Password must be at least 14 characters for FIPS compliance. Please try again."
-      continue
-    fi
-    read -sp "Confirm MinIO root password: " MINIO_ROOT_PASSWORD_CONFIRM
-    echo
-    if [[ "$MINIO_ROOT_PASSWORD" == "$MINIO_ROOT_PASSWORD_CONFIRM" ]]; then
-      break
-    else
-      echo "Passwords do not match. Please try again."
-    fi
-  done
-
-  while true; do
-    read -p "Enter bucket name [default: data]: " BUCKET_NAME
-    BUCKET_NAME=${BUCKET_NAME:-data}
-    # Validate bucket name according to MinIO rules
-    if [[ "$BUCKET_NAME" =~ ^[a-z0-9][a-z0-9.-]*$ ]] && [ ${#BUCKET_NAME} -ge 3 ] && [ ${#BUCKET_NAME} -le 63 ]; then
-      break
-    else
-      echo "Invalid bucket name. Bucket name must:"
-      echo "- Be between 3 and 63 characters long"
-      echo "- Start with a letter or number"
-      echo "- Contain only lowercase letters, numbers, dots, and hyphens"
-      echo "- Be a valid DNS name"
-    fi
-  done
-
-  echo "Domain, credentials, and bucket name collected."
-  echo "-------------------------------------------------------------"
-  echo
-
-  # ------------------------------------------------------------
-  # Step 3: TLS Certificate Retrieval
-  # ------------------------------------------------------------
-  echo "-------------------------------------------------------------"
-  echo "Step 3: TLS Certificate Retrieval"
-  echo "Description: Obtaining or using existing TLS certificates via Let's Encrypt."
-  echo "-------------------------------------------------------------"
-
-  read -p "Do you want to create a TLS certificate for ${MINIO_DOMAIN} using Let's Encrypt? (Y/n): " CREATE_CERT
-
-  if [[ "$CREATE_CERT" =~ ^[Yy]$ ]]; then
-    CERT_PATH="/etc/letsencrypt/live/${MINIO_DOMAIN}"
-    if sudo test -d "$CERT_PATH"; then
-      echo "Certificate for ${MINIO_DOMAIN} already exists. Using existing certificate."
-      sudo cp "${CERT_PATH}/privkey.pem" "$CERTS_DIR/private.key" || error_exit "Failed to copy private key."
-      sudo cp "${CERT_PATH}/fullchain.pem" "$CERTS_DIR/public.crt" || error_exit "Failed to copy public certificate."
-    else
-      if ! command -v certbot >/dev/null; then
-        echo "Certbot not found. Installing certbot."
-        sudo apt-get update && sudo apt-get install -y certbot || error_exit "Failed to install Certbot."
-      fi
-      echo "Obtaining certificate for ${MINIO_DOMAIN} using standalone mode."
-      sudo certbot certonly --non-interactive --agree-tos --standalone -d "${MINIO_DOMAIN}" --register-unsafely-without-email || error_exit "Certbot failed to obtain certificate."
-      if sudo test -f "${CERT_PATH}/privkey.pem" && sudo test -f "${CERT_PATH}/fullchain.pem"; then
-        sudo cp "${CERT_PATH}/privkey.pem" "$CERTS_DIR/private.key" || error_exit "Failed to copy private key."
-        sudo cp "${CERT_PATH}/fullchain.pem" "$CERTS_DIR/public.crt" || error_exit "Failed to copy public certificate."
-        echo "Certificate obtained and placed in $CERTS_DIR."
-        
-        # Configure certificate update using the shared function
-        configure_cert_update "$MINIO_DOMAIN" "$CERT_PATH" "$CERTS_DIR" "$MINIO_BASE_DIR"
-        
-      else
-        error_exit "Failed to obtain certificate for ${MINIO_DOMAIN}. Exiting."
-      fi
-    fi
-  else
-    echo "Please place your MinIO TLS certificates (private.key and public.crt) into $CERTS_DIR."
-    read -p "Press [Enter] after placing the certificates..."
-    if [ ! -f "$CERTS_DIR/private.key" ] || [ ! -f "$CERTS_DIR/public.crt" ]; then
-      error_exit "Certificates not found in $CERTS_DIR. Exiting."
-    fi
-  fi
-
-  echo "TLS certificate setup complete."
-  echo "-------------------------------------------------------------"
-  echo
-
-  # ------------------------------------------------------------
-  # Step 4: Creating Docker Compose File
-  # ------------------------------------------------------------
-  echo "-------------------------------------------------------------"
-  echo "Step 4: Creating Docker Compose File"
-  echo "Description: Generating docker-compose.yaml for MinIO service."
-  echo "-------------------------------------------------------------"
-
-  DOCKER_COMPOSE_FILE="$MINIO_BASE_DIR/docker-compose.yaml"
-
-  cat > "$DOCKER_COMPOSE_FILE" <<EOF
-services:
-  minio:
-    container_name: minio
-    image: minio/minio:RELEASE.2024-12-18T13-15-44Z.fips
-    command: server /data
-    environment:
-      MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
-      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
-    ports:
-      - "443:9000"
-      - "9001:9001"
-    volumes:
-      - ./data:/data
-      - ./certs/minio:/root/.minio/certs
-    restart: unless-stopped
-EOF
-
-  echo "Docker Compose file created successfully."
-  echo "-------------------------------------------------------------"
-  echo
-
-  # ------------------------------------------------------------
-  # Step 5: Starting MinIO Container
-  # ------------------------------------------------------------
-  echo "-------------------------------------------------------------"
-  echo "Step 5: Starting MinIO Container"
-  echo "Description: Using Docker Compose to launch the MinIO service."
-  echo "-------------------------------------------------------------"
-
-  cd "$MINIO_BASE_DIR" || error_exit "Failed to change directory to $MINIO_BASE_DIR."
-  docker compose up -d || error_exit "Failed to start MinIO container."
-
-  echo "Waiting for MinIO to initialize..."
-  sleep 10
-  echo "MinIO container started."
-  echo "-------------------------------------------------------------"
-  echo
-
-  # ------------------------------------------------------------
-  # Step 6: Health Check
-  # ------------------------------------------------------------
-  echo "-------------------------------------------------------------"
-  echo "Step 6: Health Check"
-  echo "Description: Verifying that MinIO is running and healthy."
-  echo "-------------------------------------------------------------"
-
-  HEALTH_URL="https://${MINIO_DOMAIN}/minio/health/ready"
-  HTTP_STATUS=$(curl -ks -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo "Failed to connect")
-  echo "HTTP Status Code from health check: $HTTP_STATUS"
-
-  if [ "$HTTP_STATUS" -eq 200 ]; then
-    echo "MinIO is healthy and running at https://${MINIO_DOMAIN}"
-  else
-    echo "MinIO health check failed with status code $HTTP_STATUS."
-    echo "Please verify your setup."
-    exit 1
-  fi
-
-  # ------------------------------------------------------------
-  # Footer
-  # ------------------------------------------------------------
-  echo "============================================================="
-  echo "                 MinIO Setup Completed"
-  echo "Your MinIO instance is now up and running."
-  echo "============================================================="
-
-  # Add lifecycle rule after MinIO is running
-  echo "Setting up lifecycle rule for domain ${MINIO_DOMAIN} with root user ${MINIO_ROOT_USER}..."
-  
-  # Install mc client in the container if it doesn't exist
-  if ! docker exec minio which mc &>/dev/null; then
-    echo "Installing MinIO Client (mc) in the container..."
-    docker exec minio sh -c "curl -L -o /tmp/mc https://dl.min.io/client/mc/release/linux-amd64/mc && chmod +x /tmp/mc && mv /tmp/mc /usr/bin/mc"
-  fi
-  
-  docker exec minio mc alias set local https://${MINIO_DOMAIN} "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" --insecure
-  
-  # Create the specified bucket if it doesn't exist
-  echo "Creating bucket '${BUCKET_NAME}'..."
-  if ! docker exec minio mc ls local/${BUCKET_NAME} --insecure &>/dev/null; then
-    docker exec minio mc mb local/${BUCKET_NAME} --insecure || error_exit "Failed to create bucket ${BUCKET_NAME}"
-    echo "Bucket '${BUCKET_NAME}' created successfully."
-  else
-    echo "Bucket '${BUCKET_NAME}' already exists."
-  fi
-  
-  # Add lifecycle rule to the bucket with /downloads and /tmp-files prefixes
-  echo "Adding lifecycle rule to bucket for /downloads and /tmp-files prefixes..."
-  docker exec minio mc ilm add local/${BUCKET_NAME} --expire-days 1 --prefix "downloads" --insecure
-  docker exec minio mc ilm add local/${BUCKET_NAME} --expire-days 1 --prefix "/downloads" --insecure
-  docker exec minio mc ilm add local/${BUCKET_NAME} --expire-days 1 --prefix "tmp-files" --insecure
-  docker exec minio mc ilm add local/${BUCKET_NAME} --expire-days 1 --prefix "/tmp-files" --insecure
-
-  echo "MinIO setup completed with lifecycle rules configured for '${BUCKET_NAME}/downloads' and '${BUCKET_NAME}/tmp-files' prefixes."
-}
-
-# Setup certificate update function
-setup_cert_update() {
-  echo "============================================================="
-  echo "         MinIO Certificate Update Automation Setup"
-  echo "This option will configure automatic certificate updates"
-  echo "for your existing Let's Encrypt certificates."
-  echo "============================================================="
-  echo
-
-  # Ask directly for domain name
-  read -p "Enter the domain for MinIO Service: " MINIO_DOMAIN
-  
-  # Final check for domain
-  if [ -z "$MINIO_DOMAIN" ]; then
-    error_exit "Domain cannot be empty"
-  fi
-  
-  # Check if certificate exists
-  CERT_PATH="/etc/letsencrypt/live/${MINIO_DOMAIN}"
-  if [ ! -d "$CERT_PATH" ]; then
-    echo "Certificate for ${MINIO_DOMAIN} not found at $CERT_PATH"
-    read -p "Would you like to create a new certificate for ${MINIO_DOMAIN}? (Y/n): " CREATE_CERT
-    
-    if [[ ! "$CREATE_CERT" =~ ^[Nn]$ ]]; then
-      # Check if certbot is installed
-      if ! command -v certbot >/dev/null; then
-        echo "Certbot not found. Installing certbot..."
-        sudo apt-get update && sudo apt-get install -y certbot || error_exit "Failed to install Certbot."
-      fi
-      
-      # Get MinIO certificate path
-      SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-      MINIO_BASE_DIR="$SCRIPT_DIR/minio"
-      CERTS_DIR="$MINIO_BASE_DIR/certs/minio"
-      
-      if [ ! -d "$CERTS_DIR" ]; then
-        echo "Creating MinIO certificates directory..."
-        mkdir -p "$CERTS_DIR" || error_exit "Failed to create MinIO certificates directory."
-      fi
-      
-      # Obtain certificate
-      echo "Obtaining certificate for ${MINIO_DOMAIN} using standalone mode."
-      sudo certbot certonly --non-interactive --agree-tos --standalone -d "${MINIO_DOMAIN}" --register-unsafely-without-email || error_exit "Certbot failed to obtain certificate."
-      
-      if sudo test -f "${CERT_PATH}/privkey.pem" && sudo test -f "${CERT_PATH}/fullchain.pem"; then
-        echo "Certificate obtained successfully."
-      else
-        error_exit "Failed to obtain certificate for ${MINIO_DOMAIN}. Exiting."
-      fi
-    else
-      error_exit "Cannot proceed without a valid certificate."
-    fi
-  else
-    echo "Certificate found for ${MINIO_DOMAIN}"
-  fi
-  
-  # Get MinIO certificate path
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  MINIO_BASE_DIR="$SCRIPT_DIR/minio"
-  CERTS_DIR="$MINIO_BASE_DIR/certs/minio"
-  
-  if [ ! -d "$CERTS_DIR" ]; then
-    echo "Creating MinIO certificates directory..."
-    mkdir -p "$CERTS_DIR" || error_exit "Failed to create MinIO certificates directory."
-  fi
-  
-  # Copy current certificates to MinIO service location
-  echo "Copying current certificates to MinIO service location..."
-  sudo cp "${CERT_PATH}/privkey.pem" "$CERTS_DIR/private.key" || error_exit "Failed to copy private key."
-  sudo cp "${CERT_PATH}/fullchain.pem" "$CERTS_DIR/public.crt" || error_exit "Failed to copy public certificate."
-  
-  # Configure certificate update using the shared function
-  configure_cert_update "$MINIO_DOMAIN" "$CERT_PATH" "$CERTS_DIR" "$MINIO_BASE_DIR"
-  
-  # Run validation script if available
-  if [ -f "$SCRIPT_DIR/validate_minio_renewal.sh" ]; then
-    echo "Validation script found. You can verify your setup with:"
-    echo "sudo $SCRIPT_DIR/validate_minio_renewal.sh"
-  fi
-  
-  echo "============================================================="
-  echo "Certificate update automation setup completed successfully."
-  echo "============================================================="
-}
-
-# Start the script
-show_menu
+__PAYLOAD_START__
+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AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
