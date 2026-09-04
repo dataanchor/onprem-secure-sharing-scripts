@@ -1,0 +1,207 @@
+{
+  "schema_version": "1",
+  "repository": "onprem-secure-sharing-scripts",
+  "generated_at": "2026-09-04T12:00:00Z",
+  "ref": "24ab51f",
+  "branch": "docs/generate-wiki",
+  "style": "technical",
+  "options": {},
+  "pages": [
+    {
+      "page_id": "overview",
+      "path": "pages/01-overview.md",
+      "title": "Overview",
+      "source_files": [
+        "readme.md",
+        "AGENTS.md",
+        "ARCHITECTURE.md",
+        "setup_onprem.sh",
+        "setup_minio.sh",
+        "validate_onprem_renewal.sh",
+        "validate_minio_renewal.sh"
+      ]
+    },
+    {
+      "page_id": "repo-map",
+      "path": "pages/02-repo-map.md",
+      "title": "Repository Map",
+      "source_files": [
+        "AGENTS.md",
+        "ARCHITECTURE.md",
+        "onprem-sharing-scripts/AGENTS.md",
+        "readme.md"
+      ]
+    },
+    {
+      "page_id": "self-extracting-installer",
+      "path": "pages/03-self-extracting-installer.md",
+      "title": "Self-Extracting Installer",
+      "source_files": [
+        "setup_onprem.sh"
+      ]
+    },
+    {
+      "page_id": "onprem-orchestrator",
+      "path": "pages/04-onprem-orchestrator.md",
+      "title": "On-Prem Orchestrator",
+      "source_files": [
+        "onprem-sharing-scripts/setup_onprem_new.sh"
+      ]
+    },
+    {
+      "page_id": "configuration",
+      "path": "pages/05-configuration.md",
+      "title": "Configuration",
+      "source_files": [
+        "onprem-sharing-scripts/config/defaults.conf"
+      ]
+    },
+    {
+      "page_id": "common-utilities",
+      "path": "pages/06-common-utilities.md",
+      "title": "Common Utilities",
+      "source_files": [
+        "onprem-sharing-scripts/lib/common.sh"
+      ]
+    },
+    {
+      "page_id": "prerequisites",
+      "path": "pages/07-prerequisites.md",
+      "title": "Prerequisites",
+      "source_files": [
+        "onprem-sharing-scripts/lib/prerequisites.sh"
+      ]
+    },
+    {
+      "page_id": "jwt-gate",
+      "path": "pages/08-jwt-gate.md",
+      "title": "JWT Gate",
+      "source_files": [
+        "onprem-sharing-scripts/lib/jwt_utils.sh",
+        "onprem-sharing-scripts/config/defaults.conf"
+      ]
+    },
+    {
+      "page_id": "cert-provisioning",
+      "path": "pages/09-cert-provisioning.md",
+      "title": "Certificate Provisioning",
+      "source_files": [
+        "onprem-sharing-scripts/lib/cert_provisioning.sh"
+      ]
+    },
+    {
+      "page_id": "input-collection",
+      "path": "pages/10-input-collection.md",
+      "title": "Input Collection",
+      "source_files": [
+        "onprem-sharing-scripts/lib/input_collector.sh"
+      ]
+    },
+    {
+      "page_id": "tls-setup",
+      "path": "pages/11-tls-setup.md",
+      "title": "TLS Setup",
+      "source_files": [
+        "onprem-sharing-scripts/lib/tls_setup.sh"
+      ]
+    },
+    {
+      "page_id": "config-generator",
+      "path": "pages/12-config-generator.md",
+      "title": "Config Generator",
+      "source_files": [
+        "onprem-sharing-scripts/lib/config_generator.sh",
+        "onprem-sharing-scripts/config/defaults.conf"
+      ]
+    },
+    {
+      "page_id": "service-manager",
+      "path": "pages/13-service-manager.md",
+      "title": "Service Manager",
+      "source_files": [
+        "onprem-sharing-scripts/lib/service_manager.sh"
+      ]
+    },
+    {
+      "page_id": "integration-registration",
+      "path": "pages/14-integration-registration.md",
+      "title": "Integration Registration",
+      "source_files": [
+        "onprem-sharing-scripts/lib/integration_service.sh",
+        "onprem-sharing-scripts/config/defaults.conf"
+      ]
+    },
+    {
+      "page_id": "cli-modes",
+      "path": "pages/15-cli-modes.md",
+      "title": "CLI Modes",
+      "source_files": [
+        "onprem-sharing-scripts/lib/cli_utils.sh",
+        "onprem-sharing-scripts/lib/deployment_utils.sh"
+      ]
+    },
+    {
+      "page_id": "minio-overview",
+      "path": "pages/16-minio-overview.md",
+      "title": "MinIO Overview",
+      "source_files": [
+        "setup_minio.sh"
+      ]
+    },
+    {
+      "page_id": "minio-tls-renewal",
+      "path": "pages/17-minio-tls-renewal.md",
+      "title": "MinIO TLS Renewal",
+      "source_files": [
+        "setup_minio.sh"
+      ]
+    },
+    {
+      "page_id": "minio-buckets",
+      "path": "pages/18-minio-buckets.md",
+      "title": "MinIO Buckets",
+      "source_files": [
+        "setup_minio.sh"
+      ]
+    },
+    {
+      "page_id": "minio-modules",
+      "path": "pages/19-minio-modules.md",
+      "title": "MinIO Modules",
+      "source_files": [
+        "setup_minio.sh"
+      ]
+    },
+    {
+      "page_id": "renewal-validators",
+      "path": "pages/20-renewal-validators.md",
+      "title": "Renewal Validators",
+      "source_files": [
+        "validate_onprem_renewal.sh",
+        "validate_minio_renewal.sh"
+      ]
+    },
+    {
+      "page_id": "security-secrets",
+      "path": "pages/21-security-secrets.md",
+      "title": "Security and Secrets",
+      "source_files": [
+        "onprem-sharing-scripts/lib/config_generator.sh",
+        "onprem-sharing-scripts/lib/tls_setup.sh",
+        "onprem-sharing-scripts/lib/cert_provisioning.sh",
+        "AGENTS.md"
+      ]
+    },
+    {
+      "page_id": "operational-notes",
+      "path": "pages/22-operational-notes.md",
+      "title": "Operational Notes",
+      "source_files": [
+        "readme.md",
+        "docs/development.md",
+        "ARCHITECTURE.md",
+        "setup_onprem.sh"
+      ]
+    }
+  ]
+}
